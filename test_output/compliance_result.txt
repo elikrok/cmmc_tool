@@ -1,0 +1,109 @@
+Hostname: CoreSwitch01
+Compliance Status: NOT COMPLIANT
+
+Control Checks:
+  - CM.L1-3.4.1: PASSED
+  - AC.L1-3.1.1: PASSED
+    AAA configured: Yes
+    TACACS servers: 10.1.100.11, 10.1.100.10
+    Connectivity: SKIPPED (user selected)
+  - AC.L1-3.1.2: PASSED
+    enable secret present: Yes
+    user privileges/roles parsed: True
+    telnet disabled on VTY: Yes
+  - SC.L1-3.13.1: PASSED
+    SSH-only mgmt: Yes
+    ACLs present & applied: Yes
+    mgmt ACL bound (vty/access-class or Mgmt1 ACL): No
+    mgmt VRF or Mgmt1 present: Yes
+  - SC.L1-3.13.5: FAILED
+    DMZ interfaces missing ACL binding:
+      • interface Ethernet4
+      • vlan 500
+      • interface Vlan500
+
+Evidence:
+  • File Hash (SHA-256): 43761719afe4cff141b656a2646757a5198b34ebe2e7f06f070a7726e37b9cdb
+  • Evidence File: mock_configs\current\core-switch-01.cfg
+
+========================================
+
+Hostname: DMZFirewall01
+Compliance Status: NOT COMPLIANT
+
+Control Checks:
+  - CM.L1-3.4.1: FAILED
+    Missing vs Baseline:
+      • enable secret 5 $1$WXYZ$anotherhashhere456
+      • username fwadmin privilege 15 secret fwpass123
+      • username security privilege 10 secret secpass
+      • ip access-list extended DMZ-PROTECTION
+      •  ip access-group DMZ-PROTECTION in
+      •  transport input ssh
+    Unexpected vs Baseline:
+      • username fwadmin privilege 15 password plaintext123
+      •  transport input ssh telnet
+  - AC.L1-3.1.1: PASSED
+    AAA configured: Yes
+    TACACS servers: 10.1.100.10, 10.1.100.12
+    Connectivity: SKIPPED (user selected)
+  - AC.L1-3.1.2: FAILED
+    enable secret present: No
+    user privileges/roles parsed: True
+    telnet disabled on VTY: Yes
+  - SC.L1-3.13.1: FAILED
+    SSH-only mgmt: No
+    ACLs present & applied: Yes
+    mgmt ACL bound (vty/access-class or Mgmt1 ACL): Yes
+    mgmt VRF or Mgmt1 present: No
+  - SC.L1-3.13.5: FAILED
+    DMZ interfaces missing ACL binding:
+      • interface GigabitEthernet0/2
+      • interface GigabitEthernet0/1
+
+Evidence:
+  • File Hash (SHA-256): c904e3fea2bdf0863a323fb29e0be469f0a409c7dbcbbeecc254d0766b507ce4
+  • Evidence File: mock_configs\current\dmz-firewall-01.cfg
+
+========================================
+
+Hostname: EdgeRouter01
+Compliance Status: NOT COMPLIANT
+
+Control Checks:
+  - CM.L1-3.4.1: FAILED
+    Missing vs Baseline:
+      • enable secret 5 $1$SAFE$complianthashere789
+      • username admin privilege 15 secret adminpass123
+      • username operator privilege 5 secret operatorpass
+      • aaa authentication login default group tacacs+ local
+      • tacacs-server host 10.1.100.10 key supersecretkey
+      • tacacs-server host 10.1.100.11 key supersecretkey
+      •  transport input ssh
+      •  access-class VTY-MGMT in
+      •  transport input ssh
+      •  access-class VTY-MGMT in
+    Unexpected vs Baseline:
+      •  transport input ssh telnet
+      •  transport input ssh telnet
+  - AC.L1-3.1.1: FAILED
+    AAA configured: No
+    TACACS servers: None
+    Connectivity: SKIPPED (user selected)
+  - AC.L1-3.1.2: FAILED
+    enable secret present: No
+    user privileges/roles parsed: False
+    telnet disabled on VTY: Yes
+  - SC.L1-3.13.1: FAILED
+    SSH-only mgmt: No
+    ACLs present & applied: Yes
+    mgmt ACL bound (vty/access-class or Mgmt1 ACL): No
+    mgmt VRF or Mgmt1 present: No
+  - SC.L1-3.13.5: PASSED
+
+Evidence:
+  • File Hash (SHA-256): 8f70129929e93e3e926dee7d3e64bbd6e15d4f148cdc8a24f40942358627c713
+  • Evidence File: mock_configs\current\edge-router-01.cfg
+
+========================================
+

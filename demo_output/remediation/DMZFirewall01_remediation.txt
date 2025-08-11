@@ -1,0 +1,15 @@
+Remediation for DMZFirewall01
+==============================
+
+BACKUP FIRST:
+copy running-config startup-config
+
+REMEDIATION COMMANDS:
+enable secret <strong-password>
+ip access-list extended DMZ-ACL
+ permit tcp any host <dmz-server> eq 80
+ permit tcp any host <dmz-server> eq 443
+ deny ip any any
+
+SAVE CONFIGURATION:
+copy running-config startup-config
