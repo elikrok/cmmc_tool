@@ -1,8 +1,0 @@
-CMMC 2.0 Level 1 Remediation Plan
-==================================================
-
-Generated: August 11, 2025 at 03:23 PM
-Non-compliant devices: 3
-
-IMPORTANT: Always backup configurations before applying changes!
-
