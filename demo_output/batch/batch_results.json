@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-08-11T14:59:03.411737",
+  "timestamp": "2025-08-11T15:23:02.890202",
   "summary": {
     "total_devices": 3,
     "compliant_devices": 0,
@@ -56,8 +56,8 @@
         "SC.L1-3.13.5": {
           "dmz_interfaces_without_acl": [
             "interface Vlan500",
-            "vlan 500",
-            "interface Ethernet4"
+            "interface Ethernet4",
+            "vlan 500"
           ],
           "passed": false
         }
@@ -125,8 +125,8 @@
         },
         "SC.L1-3.13.5": {
           "dmz_interfaces_without_acl": [
-            "interface GigabitEthernet0/2",
-            "interface GigabitEthernet0/1"
+            "interface GigabitEthernet0/1",
+            "interface GigabitEthernet0/2"
           ],
           "passed": false
         }
