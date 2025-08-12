@@ -589,21 +589,52 @@ class ModernCMMCGUI:
                     
                     if messagebox.askyesno("Create Mock Environment", 
                                          "Mock environment not found. Create it now?\n\n"
-                                         "This will run setup_mock_environment.py"):
-                        print("🔧 Running setup_mock_environment.py")
+                                         "This will create the demo configuration files."):
+                        print("🔧 Creating mock environment...")
                         
                         try:
-                            result = subprocess.run([sys.executable, "setup_mock_environment.py"], 
-                                                  capture_output=True, text=True, 
-                                                  encoding='utf-8', errors='ignore',
-                                                  cwd=os.getcwd())
-                            
-                            if result.returncode == 0:
-                                print("✅ setup_mock_environment.py completed successfully")
-                                if mock_dir.exists():
-                                    current_path = mock_dir / "current"
-                                    baseline_path = mock_dir / "baseline"
+                            # First try to run the external script
+                            setup_script = Path("setup_mock_environment.py")
+                            if setup_script.exists():
+                                print("📁 Found setup_mock_environment.py, running it...")
+                                
+                                # Try to run with proper encoding handling
+                                try:
+                                    result = subprocess.run(
+                                        [sys.executable, str(setup_script)], 
+                                        capture_output=True, 
+                                        text=True,
+                                        encoding='utf-8',
+                                        errors='replace',  # Replace problematic characters
+                                        cwd=os.getcwd()
+                                    )
                                     
+                                    if result.returncode == 0:
+                                        print("✅ setup_mock_environment.py completed successfully")
+                                    else:
+                                        print(f"⚠️ Script returned code {result.returncode}")
+                                        if result.stderr:
+                                            print(f"Script error: {result.stderr}")
+                                        # Continue anyway, might still have created files
+                                        
+                                except UnicodeError as ue:
+                                    print(f"⚠️ Unicode error running script: {ue}")
+                                    print("📝 Falling back to direct creation...")
+                                    # Fall through to direct creation
+                                    
+                            else:
+                                print("📝 setup_mock_environment.py not found, creating directly...")
+                            
+                            # Direct creation method (fallback or primary)
+                            print("📁 Creating mock environment directly...")
+                            self.create_mock_environment_direct()
+                            
+                            # Check if directories were created
+                            if mock_dir.exists():
+                                current_path = mock_dir / "current"
+                                baseline_path = mock_dir / "baseline"
+                                
+                                if current_path.exists() and baseline_path.exists():
                                     self.current_folder.set(str(current_path.absolute()))
                                     self.baseline_folder.set(str(baseline_path.absolute()))
                                     self.root.update()
@@ -613,13 +644,13 @@ class ModernCMMCGUI:
                                                       f"Current Configs: {current_path}\n"
                                                       f"Baseline Configs: {baseline_path}")
                                 else:
-                                    messagebox.showerror("Error", "setup_mock_environment.py ran but didn't create directories")
+                                    messagebox.showerror("Error", "Mock directories were not created properly")
                             else:
-                                messagebox.showerror("Error", f"setup_mock_environment.py failed: {result.stderr}")
+                                messagebox.showerror("Error", "Failed to create mock environment")
                                 
                         except Exception as e:
-                            print(f"💥 Error running setup_mock_environment.py: {e}")
-                            messagebox.showerror("Error", f"Failed to run setup_mock_environment.py: {e}")
+                            print(f"💥 Error creating mock environment: {e}")
+                            messagebox.showerror("Error", f"Failed to create mock environment: {e}")
                     else:
                         print("❌ User cancelled")
                         
@@ -1334,15 +1365,501 @@ class ModernCMMCGUI:
         else:
             messagebox.showwarning("Warning", "Report not found. Generate it first.")
     
-    def create_mock_environment(self):
-        """Create mock environment."""
+    def create_mock_environment_direct(self):
+        """Create mock environment directly without subprocess."""
         try:
-            result = subprocess.run([sys.executable, "setup_mock_environment.py"], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
+            print("🏗️ Creating mock environment directly...")
+            
+            # Create directory structure
+            base_dir = Path("mock_configs")
+            current_dir = base_dir / "current"
+            baseline_dir = base_dir / "baseline"
+            
+            current_dir.mkdir(parents=True, exist_ok=True)
+            baseline_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Current configurations (with compliance issues)
+            current_configs = {
+                "edge-router-01.cfg": """!
+version 15.7
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname EdgeRouter01
+!
+boot-start-marker
+boot-end-marker
+!
+! Missing enable secret - COMPLIANCE ISSUE
+! Missing AAA configuration - COMPLIANCE ISSUE
+!
+multilink bundle-name authenticated
+!
+crypto pki token default removal timeout 0
+!
+license udi pid CISCO2921/K9 sn FCZ1648C0QJ
+!
+redundancy
+!
+ip access-list extended VTY-MGMT
+ permit tcp 10.1.100.0 0.0.0.255 any eq 22
+ deny   ip any any
+!
+ip access-list extended WAN-IN
+ permit tcp any host 203.0.113.1 eq 22
+ permit tcp any host 203.0.113.1 eq 443
+ deny   ip any any
+!
+interface GigabitEthernet0/0
+ description WAN/Internet Connection
+ ip address 203.0.113.1 255.255.255.0
+ ip access-group WAN-IN in
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/1
+ description LAN Connection to Core Switch
+ ip address 10.1.1.1 255.255.255.0
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/2
+ no ip address
+ shutdown
+ duplex auto
+ speed auto
+!
+router ospf 1
+ log-adjacency-changes
+ network 10.1.0.0 0.0.255.255 area 0
+!
+ip forward-protocol nd
+!
+no ip http server
+no ip http secure-server
+!
+control-plane
+!
+line con 0
+line aux 0
+line vty 0 4
+ login local
+ transport input ssh telnet
+ ! Missing access-class - COMPLIANCE ISSUE
+line vty 5 15
+ login local
+ transport input ssh telnet
+ ! Missing access-class - COMPLIANCE ISSUE
+!
+end""",
+
+                "core-switch-01.cfg": """!
+hostname CoreSwitch01
+!
+management ssh
+!
+enable secret 5 $1$ABCD$hashedpasswordhere123
+!
+username admin privilege 15 secret adminpass123
+username netops privilege 5 secret netopspass
+username readonly privilege 1 secret readpass
+!
+aaa authentication login default group tacacs+ local
+aaa group server tacacs+ TACACS-SERVERS
+ server 10.1.100.10
+ server 10.1.100.11
+!
+tacacs-server host 10.1.100.10 key supersecretkey
+tacacs-server host 10.1.100.11 key supersecretkey
+!
+ip access-list standard MGMT-HOSTS
+ 10 permit 10.1.100.0 0.0.0.255
+ 20 deny any
+!
+ip access-list extended DMZ-IN
+ 10 permit tcp any host 10.1.50.10 eq 80
+ 20 permit tcp any host 10.1.50.10 eq 443
+ 30 permit tcp any host 10.1.50.20 eq 25
+ 40 deny ip any any
+!
+vlan 100
+ name Management
+!
+vlan 200
+ name Users
+!
+vlan 300
+ name Servers
+!
+vlan 500
+ name DMZ
+!
+interface Management1
+ description Management Interface
+ ip address 10.1.100.5/24
+ ip access-group MGMT-HOSTS in
+!
+interface Vlan100
+ description Management VLAN
+ ip address 10.1.100.1/24
+!
+interface Vlan200
+ description User VLAN
+ ip address 10.1.200.1/24
+!
+interface Vlan300
+ description Server VLAN
+ ip address 10.1.30.1/24
+!
+interface Vlan500
+ description DMZ VLAN
+ ip address 10.1.50.1/24
+ ip access-group DMZ-IN in
+!
+interface Ethernet1
+ description Uplink to Edge Router
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300,500
+!
+interface Ethernet2
+ description User Access Port
+ switchport mode access
+ switchport access vlan 200
+!
+interface Ethernet3
+ description Server Access Port
+ switchport mode access
+ switchport access vlan 300
+!
+interface Ethernet4
+ description DMZ Access Port
+ switchport mode access
+ switchport access vlan 500
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+end""",
+
+                "dmz-firewall-01.cfg": """!
+hostname DMZFirewall01
+!
+! Missing enable secret - COMPLIANCE ISSUE
+!
+! Missing proper user accounts - COMPLIANCE ISSUE
+username fwadmin privilege 15 password plaintext123
+!
+aaa authentication login default group tacacs+ local
+tacacs-server host 10.1.100.10 key sharedkey123
+tacacs-server host 10.1.100.12 key sharedkey123
+!
+ip access-list extended OUTSIDE-IN
+ permit tcp any host 10.1.50.10 eq 80
+ permit tcp any host 10.1.50.10 eq 443
+ permit tcp any host 10.1.50.20 eq 25
+ permit tcp any host 10.1.50.20 eq 587
+ deny ip any any
+!
+ip access-list extended DMZ-TO-INSIDE
+ permit tcp host 10.1.50.10 10.1.30.0 0.0.0.255 eq 3306
+ permit tcp host 10.1.50.20 10.1.30.0 0.0.0.255 eq 3306
+ deny ip any any
+!
+ip access-list extended MGMT-ACCESS
+ permit tcp 10.1.100.0 0.0.0.255 any eq 22
+ deny ip any any
+!
+interface GigabitEthernet0/0
+ description Outside/WAN Interface
+ ip address 203.0.113.50 255.255.255.0
+ ip access-group OUTSIDE-IN in
+!
+interface GigabitEthernet0/1
+ description DMZ Interface
+ ip address 10.1.50.254 255.255.255.0
+ ! Missing ACL - COMPLIANCE ISSUE
+!
+interface GigabitEthernet0/2
+ description Inside Interface
+ ip address 10.1.30.254 255.255.255.0
+ ip access-group DMZ-TO-INSIDE in
+!
+router ospf 1
+ network 10.1.30.0 0.0.0.255 area 0
+ network 10.1.50.0 0.0.0.255 area 0
+!
+line vty 0 4
+ login local
+ transport input ssh telnet
+ ! Telnet enabled - COMPLIANCE ISSUE
+ access-class MGMT-ACCESS in
+!
+end"""
+            }
+            
+            # Baseline configurations (compliant versions)
+            baseline_configs = {
+                "edge-router-01.cfg": """!
+version 15.7
+service timestamps debug datetime msec
+service timestamps log datetime msec
+no service password-encryption
+!
+hostname EdgeRouter01
+!
+boot-start-marker
+boot-end-marker
+!
+enable secret 5 $1$SAFE$complianthashere789
+!
+username admin privilege 15 secret adminpass123
+username operator privilege 5 secret operatorpass
+!
+aaa authentication login default group tacacs+ local
+tacacs-server host 10.1.100.10 key supersecretkey
+tacacs-server host 10.1.100.11 key supersecretkey
+!
+multilink bundle-name authenticated
+!
+crypto pki token default removal timeout 0
+!
+license udi pid CISCO2921/K9 sn FCZ1648C0QJ
+!
+redundancy
+!
+ip access-list extended VTY-MGMT
+ permit tcp 10.1.100.0 0.0.0.255 any eq 22
+ deny   ip any any
+!
+ip access-list extended WAN-IN
+ permit tcp any host 203.0.113.1 eq 22
+ permit tcp any host 203.0.113.1 eq 443
+ deny   ip any any
+!
+interface GigabitEthernet0/0
+ description WAN/Internet Connection
+ ip address 203.0.113.1 255.255.255.0
+ ip access-group WAN-IN in
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/1
+ description LAN Connection to Core Switch
+ ip address 10.1.1.1 255.255.255.0
+ duplex auto
+ speed auto
+!
+interface GigabitEthernet0/2
+ no ip address
+ shutdown
+ duplex auto
+ speed auto
+!
+router ospf 1
+ log-adjacency-changes
+ network 10.1.0.0 0.0.255.255 area 0
+!
+ip forward-protocol nd
+!
+no ip http server
+no ip http secure-server
+!
+control-plane
+!
+line con 0
+line aux 0
+line vty 0 4
+ login local
+ transport input ssh
+ access-class VTY-MGMT in
+line vty 5 15
+ login local
+ transport input ssh
+ access-class VTY-MGMT in
+!
+end""",
+
+                "core-switch-01.cfg": """!
+hostname CoreSwitch01
+!
+management ssh
+!
+enable secret 5 $1$ABCD$hashedpasswordhere123
+!
+username admin privilege 15 secret adminpass123
+username netops privilege 5 secret netopspass
+username readonly privilege 1 secret readpass
+!
+aaa authentication login default group tacacs+ local
+aaa group server tacacs+ TACACS-SERVERS
+ server 10.1.100.10
+ server 10.1.100.11
+!
+tacacs-server host 10.1.100.10 key supersecretkey
+tacacs-server host 10.1.100.11 key supersecretkey
+!
+ip access-list standard MGMT-HOSTS
+ 10 permit 10.1.100.0 0.0.0.255
+ 20 deny any
+!
+ip access-list extended DMZ-IN
+ 10 permit tcp any host 10.1.50.10 eq 80
+ 20 permit tcp any host 10.1.50.10 eq 443
+ 30 permit tcp any host 10.1.50.20 eq 25
+ 40 deny ip any any
+!
+vlan 100
+ name Management
+!
+vlan 200
+ name Users
+!
+vlan 300
+ name Servers
+!
+vlan 500
+ name DMZ
+!
+interface Management1
+ description Management Interface
+ ip address 10.1.100.5/24
+ ip access-group MGMT-HOSTS in
+!
+interface Vlan100
+ description Management VLAN
+ ip address 10.1.100.1/24
+!
+interface Vlan200
+ description User VLAN
+ ip address 10.1.200.1/24
+!
+interface Vlan300
+ description Server VLAN
+ ip address 10.1.30.1/24
+!
+interface Vlan500
+ description DMZ VLAN
+ ip address 10.1.50.1/24
+ ip access-group DMZ-IN in
+!
+interface Ethernet1
+ description Uplink to Edge Router
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300,500
+!
+interface Ethernet2
+ description User Access Port
+ switchport mode access
+ switchport access vlan 200
+!
+interface Ethernet3
+ description Server Access Port
+ switchport mode access
+ switchport access vlan 300
+!
+interface Ethernet4
+ description DMZ Access Port
+ switchport mode access
+ switchport access vlan 500
+!
+line vty 0 4
+ login local
+ transport input ssh
+!
+end""",
+
+                "dmz-firewall-01.cfg": """!
+hostname DMZFirewall01
+!
+enable secret 5 $1$WXYZ$anotherhashhere456
+!
+username fwadmin privilege 15 secret fwpass123
+username security privilege 10 secret secpass
+!
+aaa authentication login default group tacacs+ local
+tacacs-server host 10.1.100.10 key sharedkey123
+tacacs-server host 10.1.100.12 key sharedkey123
+!
+ip access-list extended OUTSIDE-IN
+ permit tcp any host 10.1.50.10 eq 80
+ permit tcp any host 10.1.50.10 eq 443
+ permit tcp any host 10.1.50.20 eq 25
+ permit tcp any host 10.1.50.20 eq 587
+ deny ip any any
+!
+ip access-list extended DMZ-TO-INSIDE
+ permit tcp host 10.1.50.10 10.1.30.0 0.0.0.255 eq 3306
+ permit tcp host 10.1.50.20 10.1.30.0 0.0.0.255 eq 3306
+ deny ip any any
+!
+ip access-list extended MGMT-ACCESS
+ permit tcp 10.1.100.0 0.0.0.255 any eq 22
+ deny ip any any
+!
+ip access-list extended DMZ-PROTECTION
+ permit tcp any host 10.1.50.10 eq 80
+ permit tcp any host 10.1.50.10 eq 443
+ deny ip any any
+!
+interface GigabitEthernet0/0
+ description Outside/WAN Interface
+ ip address 203.0.113.50 255.255.255.0
+ ip access-group OUTSIDE-IN in
+!
+interface GigabitEthernet0/1
+ description DMZ Interface
+ ip address 10.1.50.254 255.255.255.0
+ ip access-group DMZ-PROTECTION in
+!
+interface GigabitEthernet0/2
+ description Inside Interface
+ ip address 10.1.30.254 255.255.255.0
+ ip access-group DMZ-TO-INSIDE in
+!
+router ospf 1
+ network 10.1.30.0 0.0.0.255 area 0
+ network 10.1.50.0 0.0.0.255 area 0
+!
+line vty 0 4
+ login local
+ transport input ssh
+ access-class MGMT-ACCESS in
+!
+end"""
+            }
+            
+            print("📝 Writing current configuration files...")
+            # Write current configuration files
+            for filename, content in current_configs.items():
+                file_path = current_dir / filename
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"✅ Created: {file_path}")
+            
+            print("📝 Writing baseline configuration files...")
+            # Write baseline configuration files
+            for filename, content in baseline_configs.items():
+                file_path = baseline_dir / filename
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                print(f"✅ Created: {file_path}")
+            
+            print("✅ Mock environment created successfully!")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error creating mock environment: {e}")
+            return False
+    
+    def create_mock_environment(self):
+        """Create mock environment (called from settings tab)."""
+        try:
+            if self.create_mock_environment_direct():
                 messagebox.showinfo("Success", "Mock environment created successfully!")
             else:
-                messagebox.showerror("Error", f"Failed to create mock environment: {result.stderr}")
+                messagebox.showerror("Error", "Failed to create mock environment")
         except Exception as e:
             messagebox.showerror("Error", f"Error creating mock environment: {e}")
     
