@@ -1,0 +1,4 @@
+hostname,file_path,vendor_display,score,compliant,total_controls,passed_controls,issues
+CoreSwitch01,C:\Users\Elizabeth\Desktop\Seattle U\Capstone\cmmc_tool\mock_configs\current\core-switch-01.cfg,Generic Switch,80,True,5,4,VTY lines missing access-class restrictions
+DMZFirewall01,C:\Users\Elizabeth\Desktop\Seattle U\Capstone\cmmc_tool\mock_configs\current\dmz-firewall-01.cfg,Generic,100,True,5,5,
+EdgeRouter01,C:\Users\Elizabeth\Desktop\Seattle U\Capstone\cmmc_tool\mock_configs\current\edge-router-01.cfg,Cisco IOS,40,False,5,2,No local user accounts found; No administrative privilege accounts found; No user identification mechanism found; No authentication mechanism configured

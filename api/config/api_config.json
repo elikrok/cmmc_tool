@@ -1,0 +1,21 @@
+# api/config/api_config.json
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": true,
+    "plugins": {
+        "nautobot": {
+            "enabled": false,
+            "base_url": "https://nautobot.example.com",
+            "api_token": "",
+            "timeout": 30
+        },
+        "gitlab": {
+            "enabled": false,
+            "base_url": "https://gitlab.example.com",
+            "api_token": "",
+            "project_id": "",
+            "config_path": "network_configs"
+        }
+    }
+}
