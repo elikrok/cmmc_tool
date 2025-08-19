@@ -1,8 +1,5 @@
-# modern_gui.py
-"""Modern, aesthetic GUI for CMMC compliance checking with multi-vendor support."""
-
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import threading
 import subprocess
 import webbrowser
@@ -12,6 +9,13 @@ import os
 import sys
 import csv
 import re
+
+# FIXED: Import SimplePDFReporter correctly
+try:
+    from simple_pdf_reporter import SimplePDFReporter
+    SIMPLE_PDF_AVAILABLE = True
+except ImportError:
+    SIMPLE_PDF_AVAILABLE = False
 
 def safe_import(module_name, class_name=None):
     """Safely import modules with better error handling."""
@@ -33,30 +37,40 @@ class ComplianceChecker:
     
     def __init__(self):
         self.cmmc_controls = {
-            'AC.1.001': {
+            'AC.L1-3.1.1': {
                 'name': 'Access Control Policy',
                 'description': 'Limit system access to authorized users',
                 'check_function': self.check_access_control
             },
-            'AC.1.002': {
+            'AC.L1-3.1.2': {
                 'name': 'Account Management', 
                 'description': 'Limit system access to authorized users',
                 'check_function': self.check_account_management
             },
-            'IA.1.076': {
+            'IA.L1-3.5.1': {
                 'name': 'User Identification',
                 'description': 'Identify system users',
                 'check_function': self.check_user_identification
             },
-            'IA.1.077': {
+            'IA.L1-3.5.2': {
                 'name': 'User Authentication',
                 'description': 'Authenticate system users',
                 'check_function': self.check_user_authentication
             },
-            'SC.1.175': {
+            'SC.L1-3.13.1': {
                 'name': 'Boundary Protection',
                 'description': 'Monitor and control network communications',
                 'check_function': self.check_boundary_protection
+            },
+            'SC.L1-3.13.5': {
+                'name': 'Public Access Point Controls',
+                'description': 'Deny network communications by default',
+                'check_function': self.check_public_access_controls
+            },
+            'CM.L1-3.4.1': {
+                'name': 'Configuration Management',
+                'description': 'Maintain baseline configurations',
+                'check_function': self.check_configuration_management
             }
         }
     
@@ -88,23 +102,46 @@ class ComplianceChecker:
             total_controls = len(self.cmmc_controls)
             passed_controls = 0
             
+            # FIXED: Ensure all check data is preserved for dashboard
             for control_id, control_info in self.cmmc_controls.items():
-                check_result = control_info['check_function'](config_content)
-                result['checks'][control_id] = {
-                    'name': control_info['name'],
-                    'description': control_info['description'],
-                    'passed': check_result['passed'],
-                    'details': check_result['details'],
-                    'issues': check_result['issues']
-                }
-                
-                if check_result['passed']:
-                    passed_controls += 1
-                else:
-                    result['issues'].extend(check_result['issues'])
+                try:
+                    check_result = control_info['check_function'](config_content)
+                    
+                    # Ensure check_result has required fields
+                    if not isinstance(check_result, dict):
+                        check_result = {'passed': False, 'details': 'Invalid check result', 'issues': ['Check function error']}
+                    
+                    # Store detailed check results - FIXED: Include all check data for dashboard
+                    result['checks'][control_id] = {
+                        'name': control_info['name'],
+                        'description': control_info['description'],
+                        'passed': check_result.get('passed', False),
+                        'details': check_result.get('details', ''),
+                        'issues': check_result.get('issues', []),
+                        # FIXED: Include all check-specific data that dashboard expects
+                        **{k: v for k, v in check_result.items() if k not in ['passed', 'details', 'issues']}
+                    }
+                    
+                    if check_result.get('passed', False):
+                        passed_controls += 1
+                        print(f"  ✅ {control_id}: PASS")
+                    else:
+                        result['issues'].extend(check_result.get('issues', []))
+                        print(f"  ❌ {control_id}: FAIL - {', '.join(check_result.get('issues', []))}")
+                        
+                except Exception as e:
+                    print(f"  ❌ {control_id}: ERROR - {e}")
+                    result['checks'][control_id] = {
+                        'name': control_info['name'],
+                        'description': control_info['description'],
+                        'passed': False,
+                        'details': f'Check error: {e}',
+                        'issues': [f'Error running check: {e}']
+                    }
+                    result['issues'].append(f'{control_id}: Error running check')
             
-            # Calculate score and compliance
-            result['score'] = int((passed_controls / total_controls) * 100)
+            # FIXED: Calculate score correctly based on actual results
+            result['score'] = int((passed_controls / total_controls) * 100) if total_controls > 0 else 0
             result['compliant'] = result['score'] >= 80  # 80% threshold for compliance
             
             print(f"✅ {hostname}: {result['score']}% compliant ({passed_controls}/{total_controls} controls)")
@@ -135,110 +172,181 @@ class ComplianceChecker:
             return 'Generic Switch'
         else:
             return 'Generic'
-    
+
     def check_access_control(self, config):
-        """Check AC.1.001 - Access Control Policy implementation."""
+        """Check AC.L1-3.1.1 - Access Control Policy implementation."""
         issues = []
         passed = True
         
-        # Check for VTY access control
-        if 'line vty' in config:
-            if 'access-class' not in config:
-                issues.append("VTY lines missing access-class restrictions")
-                passed = False
+        # Check for AAA authentication
+        aaa_configured = 'aaa authentication' in config
+        if not aaa_configured:
+            issues.append("AAA authentication not configured")
+            passed = False
         
-        # Check for management interface protection
-        if 'interface Management' in config or 'interface Vlan' in config:
-            if 'ip access-group' not in config:
-                issues.append("Management interfaces may lack access control")
+        # Check for TACACS servers
+        tacacs_servers = []
+        if 'tacacs-server' in config or 'tacacs server' in config:
+            # Extract TACACS server IPs (simplified)
+            tacacs_matches = re.findall(r'tacacs(?:-server)?\s+host\s+(\S+)', config, re.IGNORECASE)
+            tacacs_servers = tacacs_matches
+        
+        if not tacacs_servers:
+            issues.append("No TACACS+ servers configured")
         
         return {
             'passed': passed,
-            'details': "Checks for access control lists and VTY restrictions",
-            'issues': issues
+            'details': "Checks for AAA authentication and TACACS+ servers",
+            'issues': issues,
+            'aaa_configured': aaa_configured,
+            'tacacs_servers': tacacs_servers
         }
     
     def check_account_management(self, config):
-        """Check AC.1.002 - Account Management."""
+        """Check AC.L1-3.1.2 - Account Management."""
         issues = []
-        passed = False
+        passed = True
         
-        # Check for local users
-        if 'username ' in config:
-            passed = True
-        else:
-            issues.append("No local user accounts found")
+        # Check for enable secret
+        enable_secret_present = 'enable secret' in config
+        if not enable_secret_present:
+            issues.append("Enable secret not configured")
+            passed = False
         
-        # Check for privilege levels
-        if 'privilege 15' not in config:
-            issues.append("No administrative privilege accounts found")
+        # Check for Telnet (should be disabled)
+        telnet_enabled = ('transport input telnet' in config or 
+                         ('transport input all' in config and 'no telnet' not in config))
+        no_telnet = not telnet_enabled
+        
+        if telnet_enabled:
+            issues.append("Telnet access enabled (security risk)")
         
         return {
             'passed': passed,
-            'details': "Checks for proper user account configuration",
-            'issues': issues
+            'details': "Checks for enable secret and secure transport",
+            'issues': issues,
+            'enable_secret_present': enable_secret_present,
+            'no_telnet': no_telnet
         }
     
     def check_user_identification(self, config):
-        """Check IA.1.076 - User Identification."""
+        """Check IA.L1-3.5.1 - User Identification."""
         issues = []
-        passed = False
+        user_identification = 'username ' in config
+        passed = user_identification
         
-        if 'username ' in config:
-            passed = True
-        else:
+        if not user_identification:
             issues.append("No user identification mechanism found")
             
         return {
             'passed': passed,
             'details': "Checks for user identification systems",
-            'issues': issues
+            'issues': issues,
+            'user_identification': user_identification
         }
     
     def check_user_authentication(self, config):
-        """Check IA.1.077 - User Authentication.""" 
+        """Check IA.L1-3.5.2 - User Authentication.""" 
         issues = []
         passed = True
         
-        # Check for enable secret
-        if 'enable secret' not in config and 'enable password' not in config:
+        # Check for enable secret or password
+        enable_auth = 'enable secret' in config or 'enable password' in config
+        if not enable_auth:
             issues.append("Missing enable secret/password")
             passed = False
         
-        # Check for AAA authentication
-        if 'aaa authentication' not in config and 'username ' not in config:
+        # Check for authentication mechanism
+        auth_configured = 'aaa authentication' in config or 'username ' in config
+        if not auth_configured:
             issues.append("No authentication mechanism configured")
             passed = False
-        
-        # Check for weak passwords (plaintext)
-        if 'password ' in config and 'secret' not in config:
-            issues.append("Plaintext passwords detected")
         
         return {
             'passed': passed,
             'details': "Checks for authentication mechanisms and password security",
-            'issues': issues
+            'issues': issues,
+            'authentication_configured': auth_configured
         }
     
     def check_boundary_protection(self, config):
-        """Check SC.1.175 - Boundary Protection."""
+        """Check SC.L1-3.13.1 - Boundary Protection."""
         issues = []
-        passed = False
         
         # Check for access lists
-        if 'ip access-list' in config or 'access-list' in config:
-            passed = True
-        else:
+        acls_present = 'ip access-list' in config or 'access-list' in config
+        ssh_mgmt = 'transport input ssh' in config
+        
+        passed = acls_present and ssh_mgmt
+        
+        if not acls_present:
             issues.append("No access control lists found for boundary protection")
         
-        # Check for interface security
-        if 'interface ' in config and 'ip access-group' not in config:
-            issues.append("Interfaces may lack access control groups")
+        if not ssh_mgmt:
+            issues.append("SSH-only management not configured")
         
         return {
             'passed': passed,
             'details': "Checks for network boundary protection mechanisms",
-            'issues': issues
+            'issues': issues,
+            'acls_present_and_applied': acls_present,
+            'ssh_mgmt': ssh_mgmt
+        }
+    
+    def check_public_access_controls(self, config):
+        """Check SC.L1-3.13.5 - Public Access Point Controls."""
+        issues = []
+        
+        # Check for DMZ interfaces with ACLs (simplified check)
+        dmz_interfaces_without_acl = []
+        
+        # Look for interfaces that might be DMZ without ACLs
+        interface_matches = re.findall(r'interface\s+(\S+.*?)\n(.*?)(?=interface|\Z)', config, re.DOTALL | re.IGNORECASE)
+        
+        for interface_name, interface_config in interface_matches:
+            if ('dmz' in interface_name.lower() or 
+                'outside' in interface_config.lower() or
+                'wan' in interface_config.lower()):
+                if 'ip access-group' not in interface_config:
+                    dmz_interfaces_without_acl.append(interface_name)
+        
+        passed = len(dmz_interfaces_without_acl) == 0
+        
+        if dmz_interfaces_without_acl:
+            issues.append(f"DMZ/public interfaces without ACLs: {', '.join(dmz_interfaces_without_acl)}")
+        
+        return {
+            'passed': passed,
+            'details': "Checks for public access point controls",
+            'issues': issues,
+            'dmz_interfaces_without_acl': dmz_interfaces_without_acl
+        }
+    
+    def check_configuration_management(self, config):
+        """Check CM.L1-3.4.1 - Configuration Management."""
+        issues = []
+        passed = True
+        
+        # Simplified baseline check - in reality this would compare against baseline files
+        missing_lines = []
+        extra_lines = []
+        
+        # Basic checks for standard configurations
+        if 'service timestamps' not in config:
+            missing_lines.append("service timestamps")
+        if 'logging' not in config:
+            missing_lines.append("logging configuration")
+        
+        if missing_lines:
+            issues.append(f"Missing baseline configurations: {len(missing_lines)} items")
+            passed = False
+        
+        return {
+            'passed': passed,
+            'details': "Checks for configuration management compliance",
+            'issues': issues,
+            'missing_lines': missing_lines,
+            'extra_lines': extra_lines
         }
 
 class ModernCMMCGUI:
@@ -248,12 +356,18 @@ class ModernCMMCGUI:
         # Initialize compliance checker
         self.compliance_checker = ComplianceChecker()
         
-        # Initialize vendor support FIRST
+        # Initialize enhanced reporting support
+        self.initialize_enhanced_reporting()
+        
+        # Initialize vendor support
         self.initialize_vendor_support()
         
         # Initialize processing flag early to prevent old demo timers
         self.processing = False
         self.stop_requested = False
+        
+        # Store latest results for enhanced dashboard generation
+        self.latest_results = []
         
         # Then setup the rest
         self.setup_window()
@@ -261,13 +375,33 @@ class ModernCMMCGUI:
         self.setup_variables()
         self.create_widgets()
         
-        print("🧹 Cancelling any existing scheduled callbacks...")
-        # Cancel any pending after() calls that might exist
+        print("🧹 GUI initialization complete")
+    
+    def initialize_enhanced_reporting(self):
+        """Initialize enhanced reporting capabilities."""
         try:
-            # Clear all pending after() calls
-            self.root.after_idle(lambda: None)
-        except:
-            pass
+            # Try to import enhanced dashboard from the same directory
+            from enhanced_dashboard_generator import EnhancedCMMCDashboard
+            self.EnhancedDashboard = EnhancedCMMCDashboard
+            
+            # FIXED: Use SimplePDFReporter instead of non-existent EnhancedPDFReporter
+            if SIMPLE_PDF_AVAILABLE:
+                self.SimplePDFReporter = SimplePDFReporter
+                self.pdf_reporter_available = True
+                print("✅ PDF reporting (SimplePDFReporter) enabled")
+            else:
+                self.SimplePDFReporter = None
+                self.pdf_reporter_available = False
+                print("⚠️ PDF reporting not available - install reportlab")
+            
+            self.enhanced_reporting = True
+            print("✅ Enhanced reporting capabilities enabled")
+                
+        except Exception as e:
+            self.enhanced_reporting = False
+            self.pdf_reporter_available = False
+            print(f"⚠️ Enhanced reporting not available: {e}")
+            print("   Using basic reporting")
     
     def initialize_vendor_support(self):
         """Initialize vendor manager and support flags."""
@@ -291,8 +425,8 @@ class ModernCMMCGUI:
     def setup_window(self):
         """Configure the main window."""
         self.root.title("CMMC 2.0 Level 1 Compliance Tool - Enhanced")
-        self.root.geometry("1100x750")
-        self.root.minsize(900, 650)
+        self.root.geometry("1200x800")
+        self.root.minsize(1000, 700)
         
         # Center window on screen
         self.root.update_idletasks()
@@ -308,7 +442,7 @@ class ModernCMMCGUI:
         
         # Handle window close event
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
+
     def setup_styles(self):
         """Configure modern styling."""
         self.style = ttk.Style()
@@ -337,20 +471,20 @@ class ModernCMMCGUI:
         # Configure styles with error handling
         try:
             self.style.configure('Header.TLabel', 
-                               font=('Segoe UI', 24, 'bold'),
+                               font=('Segoe UI', 28, 'bold'),
                                foreground=self.colors['dark'])
             
             self.style.configure('Subheader.TLabel',
-                               font=('Segoe UI', 12, 'bold'),
+                               font=('Segoe UI', 14, 'bold'),
                                foreground=self.colors['gray'])
             
             self.style.configure('Primary.TButton',
-                               font=('Segoe UI', 11, 'bold'),
-                               padding=(20, 10))
+                               font=('Segoe UI', 12, 'bold'),
+                               padding=(25, 12))
             
             self.style.configure('Secondary.TButton',
-                               font=('Segoe UI', 10),
-                               padding=(15, 8))
+                               font=('Segoe UI', 11),
+                               padding=(20, 10))
             
             # Configure progress bar
             self.style.configure('Modern.Horizontal.TProgressbar',
@@ -377,6 +511,12 @@ class ModernCMMCGUI:
         self.generate_dashboard = tk.BooleanVar(value=True)
         self.parallel_processing = tk.BooleanVar(value=True)
         
+        # Enhanced reporting options
+        self.generate_enhanced_pdf = tk.BooleanVar(value=True)
+        self.generate_enhanced_dashboard = tk.BooleanVar(value=True)
+        self.include_remediation_plan = tk.BooleanVar(value=True)
+        self.detailed_explanations = tk.BooleanVar(value=True)
+        
         # Status and detection
         self.progress_text = tk.StringVar(value="Ready to start compliance check")
         self.progress_value = tk.DoubleVar()
@@ -394,10 +534,9 @@ class ModernCMMCGUI:
         self.auto_pdf = tk.BooleanVar(value=True)
         self.auto_dashboard = tk.BooleanVar(value=True)
         self.auto_remediation = tk.BooleanVar(value=False)
-        
+
     def create_scrollable_frame(self, parent):
         """Create a scrollable frame with canvas and scrollbar."""
-        # Create canvas and scrollbar
         canvas = tk.Canvas(parent)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas)
@@ -446,7 +585,7 @@ class ModernCMMCGUI:
         
         # Status bar
         self.create_status_bar(main_frame)
-        
+
     def create_header(self, parent):
         """Create header section."""
         header_frame = ttk.Frame(parent)
@@ -458,12 +597,18 @@ class ModernCMMCGUI:
                                style='Header.TLabel')
         title_label.grid(row=0, column=0, sticky="w")
         
-        # Subtitle with vendor support indicator
+        # Subtitle with feature indicators
         subtitle_text = "Network Device Configuration Compliance Checker"
+        features = []
         if self.vendor_support:
-            subtitle_text += " • Multi-Vendor Support Enabled"
+            features.append("Multi-Vendor Support")
+        if self.enhanced_reporting:
+            features.append("Enhanced Reporting")
         else:
-            subtitle_text += " • Basic Mode"
+            features.append("Basic Mode")
+        
+        if features:
+            subtitle_text += " • " + " • ".join(features)
             
         subtitle_label = ttk.Label(header_frame, 
                                   text=subtitle_text,
@@ -487,6 +632,13 @@ class ModernCMMCGUI:
         self.results_frame = self.create_scrollable_frame(results_tab_frame)
         self.create_results_tab()
         
+        # Enhanced Reporting Tab (if available)
+        if self.enhanced_reporting:
+            enhanced_tab_frame = ttk.Frame(self.notebook)
+            self.notebook.add(enhanced_tab_frame, text="  Enhanced Reports  ")
+            self.enhanced_frame = self.create_scrollable_frame(enhanced_tab_frame)
+            self.create_enhanced_reporting_tab()
+        
         # Settings Tab
         settings_tab_frame = ttk.Frame(self.notebook)
         self.notebook.add(settings_tab_frame, text="  Settings  ")
@@ -499,7 +651,40 @@ class ModernCMMCGUI:
             self.notebook.add(vendor_tab_frame, text="  Vendor Info  ")
             self.vendor_frame = self.create_scrollable_frame(vendor_tab_frame)
             self.create_vendor_tab()
+    
+    def create_status_bar(self, parent):
+        """Create status bar."""
+        status_frame = ttk.Frame(parent)
+        status_frame.grid(row=2, column=0, sticky="ew")
+        status_frame.grid_columnconfigure(0, weight=1)
         
+        separator = ttk.Separator(status_frame, orient='horizontal')
+        separator.grid(row=0, column=0, sticky="ew", pady=(10, 0))
+        
+        status_content = ttk.Frame(status_frame)
+        status_content.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        status_content.grid_columnconfigure(0, weight=1)
+        
+        self.status_label = ttk.Label(status_content, text="Ready", 
+                                     font=('Segoe UI', 9),
+                                     foreground=self.colors['gray'])
+        self.status_label.pack(side="left")
+        
+        # Version info
+        version_text = "CMMC Tool v2.0"
+        features = []
+        if self.vendor_support:
+            features.append("Multi-Vendor")
+        if self.enhanced_reporting:
+            features.append("Enhanced Reports")
+        
+        if features:
+            version_text += " • " + " • ".join(features)
+        
+        ttk.Label(status_content, text=version_text,
+                 font=('Segoe UI', 9),
+                 foreground=self.colors['gray']).pack(side="right")
+
     def create_check_tab(self):
         """Create compliance check tab."""
         # Add padding to the scrollable frame
@@ -511,14 +696,14 @@ class ModernCMMCGUI:
         files_frame.pack(fill="x", pady=(0, 20))
         
         # Current configs
-        ttk.Label(files_frame, text="Current Configs:", font=('Segoe UI', 10, 'bold')).pack(
+        ttk.Label(files_frame, text="Current Configs:", font=('Segoe UI', 11, 'bold')).pack(
             anchor="w", pady=(0, 8))
         
         current_frame = ttk.Frame(files_frame)
         current_frame.pack(fill="x", pady=(0, 15))
         
         current_entry = ttk.Entry(current_frame, textvariable=self.current_folder, 
-                                 font=('Segoe UI', 10), width=50)
+                                 font=('Segoe UI', 10), width=60)
         current_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
         ttk.Button(current_frame, text="Browse", 
@@ -526,14 +711,14 @@ class ModernCMMCGUI:
                   style='Secondary.TButton').pack(side="right")
         
         # Baseline configs
-        ttk.Label(files_frame, text="Baseline Configs:", font=('Segoe UI', 10, 'bold')).pack(
+        ttk.Label(files_frame, text="Baseline Configs:", font=('Segoe UI', 11, 'bold')).pack(
             anchor="w", pady=(0, 8))
         
         baseline_frame = ttk.Frame(files_frame)
         baseline_frame.pack(fill="x", pady=(0, 15))
         
         baseline_entry = ttk.Entry(baseline_frame, textvariable=self.baseline_folder,
-                                  font=('Segoe UI', 10), width=50)
+                                  font=('Segoe UI', 10), width=60)
         baseline_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
         ttk.Button(baseline_frame, text="Browse",
@@ -541,14 +726,14 @@ class ModernCMMCGUI:
                   style='Secondary.TButton').pack(side="right")
         
         # Output folder
-        ttk.Label(files_frame, text="Output Folder:", font=('Segoe UI', 10, 'bold')).pack(
+        ttk.Label(files_frame, text="Output Folder:", font=('Segoe UI', 11, 'bold')).pack(
             anchor="w", pady=(0, 8))
         
         output_frame = ttk.Frame(files_frame)
         output_frame.pack(fill="x")
         
         output_entry = ttk.Entry(output_frame, textvariable=self.output_folder,
-                                font=('Segoe UI', 10), width=50)
+                                font=('Segoe UI', 10), width=60)
         output_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
         
         ttk.Button(output_frame, text="Browse",
@@ -559,116 +744,15 @@ class ModernCMMCGUI:
         quick_frame = ttk.Frame(main_content)
         quick_frame.pack(fill="x", pady=(0, 20))
         
-        # Mock environment button
-        def mock_env_wrapper():
-            print("🔗 Mock environment wrapper called!")
-            try:
-                mock_dir = Path("mock_configs")
-                print(f"📁 Checking if mock_configs exists: {mock_dir.exists()}")
-                
-                if mock_dir.exists():
-                    current_path = mock_dir / "current"
-                    baseline_path = mock_dir / "baseline"
-                    
-                    if current_path.exists() and baseline_path.exists():
-                        print(f"✅ Setting existing paths")
-                        self.current_folder.set(str(current_path.absolute()))
-                        self.baseline_folder.set(str(baseline_path.absolute()))
-                        self.root.update()
-                        
-                        messagebox.showinfo("Success", 
-                                          f"Mock environment configured!\n\n"
-                                          f"Current Configs: {current_path}\n"
-                                          f"Baseline Configs: {baseline_path}\n\n"
-                                          f"Ready to run compliance check.")
-                    else:
-                        print("❌ Mock directories incomplete")
-                        messagebox.showwarning("Warning", "Mock directories exist but are incomplete")
-                else:
-                    print("❌ mock_configs not found, need to create it")
-                    
-                    if messagebox.askyesno("Create Mock Environment", 
-                                         "Mock environment not found. Create it now?\n\n"
-                                         "This will create the demo configuration files."):
-                        print("🔧 Creating mock environment...")
-                        
-                        try:
-                            # First try to run the external script
-                            setup_script = Path("setup_mock_environment.py")
-                            if setup_script.exists():
-                                print("📁 Found setup_mock_environment.py, running it...")
-                                
-                                # Try to run with proper encoding handling
-                                try:
-                                    result = subprocess.run(
-                                        [sys.executable, str(setup_script)], 
-                                        capture_output=True, 
-                                        text=True,
-                                        encoding='utf-8',
-                                        errors='replace',  # Replace problematic characters
-                                        cwd=os.getcwd()
-                                    )
-                                    
-                                    if result.returncode == 0:
-                                        print("✅ setup_mock_environment.py completed successfully")
-                                    else:
-                                        print(f"⚠️ Script returned code {result.returncode}")
-                                        if result.stderr:
-                                            print(f"Script error: {result.stderr}")
-                                        # Continue anyway, might still have created files
-                                        
-                                except UnicodeError as ue:
-                                    print(f"⚠️ Unicode error running script: {ue}")
-                                    print("📝 Falling back to direct creation...")
-                                    # Fall through to direct creation
-                                    
-                            else:
-                                print("📝 setup_mock_environment.py not found, creating directly...")
-                            
-                            # Direct creation method (fallback or primary)
-                            print("📁 Creating mock environment directly...")
-                            self.create_mock_environment_direct()
-                            
-                            # Check if directories were created
-                            if mock_dir.exists():
-                                current_path = mock_dir / "current"
-                                baseline_path = mock_dir / "baseline"
-                                
-                                if current_path.exists() and baseline_path.exists():
-                                    self.current_folder.set(str(current_path.absolute()))
-                                    self.baseline_folder.set(str(baseline_path.absolute()))
-                                    self.root.update()
-                                    
-                                    messagebox.showinfo("Success", 
-                                                      f"Mock environment created and configured!\n\n"
-                                                      f"Current Configs: {current_path}\n"
-                                                      f"Baseline Configs: {baseline_path}")
-                                else:
-                                    messagebox.showerror("Error", "Mock directories were not created properly")
-                            else:
-                                messagebox.showerror("Error", "Failed to create mock environment")
-                                
-                        except Exception as e:
-                            print(f"💥 Error creating mock environment: {e}")
-                            messagebox.showerror("Error", f"Failed to create mock environment: {e}")
-                    else:
-                        print("❌ User cancelled")
-                        
-            except Exception as e:
-                print(f"💥 Error in wrapper: {e}")
-                import traceback
-                traceback.print_exc()
-                messagebox.showerror("Error", f"Mock environment error: {e}")
-        
         mock_button = ttk.Button(quick_frame, text="🚀 Use Mock Environment", 
                                 style='Secondary.TButton',
-                                command=mock_env_wrapper)
+                                command=self.setup_mock_environment)
         mock_button.pack(side="left")
         
         ttk.Label(quick_frame, text="(Sets up demo configs automatically)",
                  foreground=self.colors['gray']).pack(side="left", padx=(10, 0))
         
-        # Options section
+        # Processing Options section
         options_frame = ttk.LabelFrame(main_content, text="Processing Options", padding="15")
         options_frame.pack(fill="x", pady=(0, 20))
         
@@ -689,11 +773,29 @@ class ModernCMMCGUI:
         option_row2 = ttk.Frame(options_grid)
         option_row2.pack(fill="x", pady=2)
         
-        ttk.Checkbutton(option_row2, text="Generate PDF report", 
-                       variable=self.generate_pdf).pack(side="left")
+        if self.enhanced_reporting:
+            ttk.Checkbutton(option_row2, text="Generate enhanced PDF report", 
+                           variable=self.generate_enhanced_pdf).pack(side="left")
+            
+            ttk.Checkbutton(option_row2, text="Generate enhanced dashboard", 
+                           variable=self.generate_enhanced_dashboard).pack(side="left", padx=(30, 0))
+        else:
+            ttk.Checkbutton(option_row2, text="Generate basic PDF report", 
+                           variable=self.generate_pdf).pack(side="left")
+            
+            ttk.Checkbutton(option_row2, text="Generate basic dashboard", 
+                           variable=self.generate_dashboard).pack(side="left", padx=(30, 0))
         
-        ttk.Checkbutton(option_row2, text="Generate HTML dashboard", 
-                       variable=self.generate_dashboard).pack(side="left", padx=(30, 0))
+        # Third row for enhanced options
+        if self.enhanced_reporting:
+            option_row3 = ttk.Frame(options_grid)
+            option_row3.pack(fill="x", pady=2)
+            
+            ttk.Checkbutton(option_row3, text="Include detailed remediation plans", 
+                           variable=self.include_remediation_plan).pack(side="left")
+            
+            ttk.Checkbutton(option_row3, text="Include CMMC control explanations", 
+                           variable=self.detailed_explanations).pack(side="left", padx=(30, 0))
         
         # Progress section
         progress_frame = ttk.LabelFrame(main_content, text="Progress", padding="15")
@@ -701,7 +803,7 @@ class ModernCMMCGUI:
         
         # Progress text
         progress_label = ttk.Label(progress_frame, textvariable=self.progress_text,
-                                  font=('Segoe UI', 10))
+                                  font=('Segoe UI', 11))
         progress_label.pack(anchor="w", pady=(0, 10))
         
         # Progress bar
@@ -729,7 +831,7 @@ class ModernCMMCGUI:
         ttk.Button(button_frame, text="📁 Open Output Folder",
                   command=self.open_output_folder,
                   style='Secondary.TButton').pack(side="right")
-    
+
     def create_results_tab(self):
         """Create results and reports tab."""
         # Add padding to the scrollable frame
@@ -744,7 +846,7 @@ class ModernCMMCGUI:
         text_frame = ttk.Frame(summary_frame)
         text_frame.pack(fill="both", expand=True)
         
-        self.summary_text = tk.Text(text_frame, height=8, wrap=tk.WORD,
+        self.summary_text = tk.Text(text_frame, height=10, wrap=tk.WORD,
                                    font=('Consolas', 10), state='disabled')
         
         # Add scrollbar to text widget
@@ -761,13 +863,22 @@ class ModernCMMCGUI:
         reports_buttons = ttk.Frame(reports_frame)
         reports_buttons.pack(fill="x")
         
-        ttk.Button(reports_buttons, text="📊 Generate PDF Report",
-                  command=self.generate_pdf_report,
-                  style='Primary.TButton').pack(side="left", padx=(0, 10))
-        
-        ttk.Button(reports_buttons, text="🌐 Generate Dashboard",
-                  command=self.generate_dashboard_report,
-                  style='Primary.TButton').pack(side="left", padx=(0, 10))
+        if self.enhanced_reporting:
+            ttk.Button(reports_buttons, text="📊 Enhanced PDF Report",
+                      command=self.generate_enhanced_pdf_report,
+                      style='Primary.TButton').pack(side="left", padx=(0, 10))
+            
+            ttk.Button(reports_buttons, text="🌐 Enhanced Dashboard",
+                      command=self.generate_enhanced_dashboard_report,
+                      style='Primary.TButton').pack(side="left", padx=(0, 10))
+        else:
+            ttk.Button(reports_buttons, text="📊 Generate PDF Report",
+                      command=self.generate_pdf_report,
+                      style='Primary.TButton').pack(side="left", padx=(0, 10))
+            
+            ttk.Button(reports_buttons, text="🌐 Generate Dashboard",
+                      command=self.generate_dashboard_report,
+                      style='Primary.TButton').pack(side="left", padx=(0, 10))
         
         ttk.Button(reports_buttons, text="🔧 Generate Remediation",
                   command=self.generate_remediation,
@@ -786,11 +897,112 @@ class ModernCMMCGUI:
         
         ttk.Button(actions_buttons, text="📄 View Latest Report",
                   command=self.view_latest_report,
-                  style='Secondary.TButton').pack(side="left")
+                  style='Secondary.TButton').pack(side="left", padx=(0, 10))
         
+        ttk.Button(actions_buttons, text="📋 Export Results",
+                  command=self.export_results,
+                  style='Secondary.TButton').pack(side="left")
+    
+    def create_enhanced_reporting_tab(self):
+        """Create enhanced reporting tab (only if enhanced reporting is available)."""
+        if not self.enhanced_reporting:
+            return
+        
+        # Add padding to the scrollable frame
+        main_content = ttk.Frame(self.enhanced_frame, padding="20")
+        main_content.pack(fill="both", expand=True)
+        
+        # Enhanced reporting info
+        info_frame = ttk.LabelFrame(main_content, text="Enhanced Reporting Features", padding="15")
+        info_frame.pack(fill="x", pady=(0, 20))
+        
+        info_text = tk.Text(info_frame, height=8, wrap=tk.WORD, font=('Segoe UI', 10))
+        info_content = """🎯 ENHANCED REPORTING CAPABILITIES:
+
+📊 Comprehensive PDF Reports:
+• Executive summary with business impact analysis
+• Detailed CMMC control explanations and implementation guidance
+• Device-specific findings with remediation recommendations
+• Risk assessment and compliance trends
+
+🌐 Interactive HTML Dashboards:
+• Modern, responsive design with real-time data visualization
+• Detailed CMMC control explanations with implementation steps
+• Interactive compliance charts and risk assessments
+• Click-through navigation for detailed control information
+
+🔧 Advanced Features:
+• Detailed remediation plans with prioritized actions
+• Business impact assessment and regulatory compliance status
+• Resource requirements and implementation timelines
+• Technical implementation guidance and best practices"""
+
+        info_text.insert(1.0, info_content)
+        info_text.config(state='disabled')
+        info_text.pack(fill="both", expand=True)
+        
+        # Enhanced report options
+        options_frame = ttk.LabelFrame(main_content, text="Report Configuration", padding="15")
+        options_frame.pack(fill="x", pady=(0, 20))
+        
+        # Report type selection
+        type_frame = ttk.Frame(options_frame)
+        type_frame.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(type_frame, text="Report Type:", font=('Segoe UI', 10, 'bold')).pack(side="left")
+        
+        self.report_type = tk.StringVar(value="both")
+        ttk.Radiobutton(type_frame, text="PDF Only", variable=self.report_type, 
+                       value="pdf").pack(side="left", padx=(20, 10))
+        ttk.Radiobutton(type_frame, text="Dashboard Only", variable=self.report_type, 
+                       value="dashboard").pack(side="left", padx=(10, 10))
+        ttk.Radiobutton(type_frame, text="Both", variable=self.report_type, 
+                       value="both").pack(side="left", padx=(10, 0))
+        
+        # Detail level selection
+        detail_frame = ttk.Frame(options_frame)
+        detail_frame.pack(fill="x", pady=(0, 10))
+        
+        ttk.Label(detail_frame, text="Detail Level:", font=('Segoe UI', 10, 'bold')).pack(side="left")
+        
+        self.detail_level = tk.StringVar(value="comprehensive")
+        ttk.Radiobutton(detail_frame, text="Executive Summary", variable=self.detail_level, 
+                       value="executive").pack(side="left", padx=(20, 10))
+        ttk.Radiobutton(detail_frame, text="Standard", variable=self.detail_level, 
+                       value="standard").pack(side="left", padx=(10, 10))
+        ttk.Radiobutton(detail_frame, text="Comprehensive", variable=self.detail_level, 
+                       value="comprehensive").pack(side="left", padx=(10, 0))
+        
+        # Additional options
+        additional_frame = ttk.Frame(options_frame)
+        additional_frame.pack(fill="x")
+        
+        ttk.Checkbutton(additional_frame, text="Include technical implementation guidance", 
+                       variable=self.detailed_explanations).pack(anchor="w", pady=2)
+        ttk.Checkbutton(additional_frame, text="Include remediation timelines and costs", 
+                       variable=self.include_remediation_plan).pack(anchor="w", pady=2)
+        
+        # Generate buttons
+        generate_frame = ttk.LabelFrame(main_content, text="Generate Enhanced Reports", padding="15")
+        generate_frame.pack(fill="x")
+        
+        buttons_frame = ttk.Frame(generate_frame)
+        buttons_frame.pack(fill="x")
+        
+        ttk.Button(buttons_frame, text="📊 Generate Enhanced PDF",
+                  command=self.generate_enhanced_pdf_report,
+                  style='Primary.TButton').pack(side="left", padx=(0, 10))
+        
+        ttk.Button(buttons_frame, text="🌐 Generate Enhanced Dashboard",
+                  command=self.generate_enhanced_dashboard_report,
+                  style='Primary.TButton').pack(side="left", padx=(0, 10))
+        
+        ttk.Button(buttons_frame, text="📋 Generate Complete Report Package",
+                  command=self.generate_complete_report_package,
+                  style='Secondary.TButton').pack(side="right")
+
     def create_settings_tab(self):
         """Create settings tab."""
-        # Add padding to the scrollable frame
         main_content = ttk.Frame(self.settings_frame, padding="20")
         main_content.pack(fill="both", expand=True)
         
@@ -811,14 +1023,29 @@ class ModernCMMCGUI:
         
         ttk.Label(report_frame, text="Auto-generate:").pack(anchor="w", pady=5)
         
-        ttk.Checkbutton(report_frame, text="PDF Report", variable=self.auto_pdf).pack(
-            anchor="w", pady=2)
-        
-        ttk.Checkbutton(report_frame, text="HTML Dashboard", variable=self.auto_dashboard).pack(
-            anchor="w", pady=2)
+        if self.enhanced_reporting:
+            ttk.Checkbutton(report_frame, text="Enhanced PDF Report", 
+                           variable=self.generate_enhanced_pdf).pack(anchor="w", pady=2)
+            ttk.Checkbutton(report_frame, text="Enhanced HTML Dashboard", 
+                           variable=self.generate_enhanced_dashboard).pack(anchor="w", pady=2)
+        else:
+            ttk.Checkbutton(report_frame, text="Basic PDF Report", variable=self.auto_pdf).pack(
+                anchor="w", pady=2)
+            ttk.Checkbutton(report_frame, text="Basic HTML Dashboard", variable=self.auto_dashboard).pack(
+                anchor="w", pady=2)
         
         ttk.Checkbutton(report_frame, text="Remediation Scripts", variable=self.auto_remediation).pack(
             anchor="w", pady=2)
+        
+        # Enhanced features settings (if available)
+        if self.enhanced_reporting:
+            enhanced_frame = ttk.LabelFrame(main_content, text="Enhanced Features", padding="15")
+            enhanced_frame.pack(fill="x", pady=(0, 20))
+            
+            ttk.Checkbutton(enhanced_frame, text="Include detailed CMMC explanations by default", 
+                           variable=self.detailed_explanations).pack(anchor="w", pady=2)
+            ttk.Checkbutton(enhanced_frame, text="Include remediation plans by default", 
+                           variable=self.include_remediation_plan).pack(anchor="w", pady=2)
         
         # Demo section
         demo_frame = ttk.LabelFrame(main_content, text="Demo & Testing", padding="15")
@@ -832,6 +1059,10 @@ class ModernCMMCGUI:
                   command=self.run_test_suite,
                   style='Secondary.TButton').pack(anchor="w", pady=2)
         
+        ttk.Button(demo_frame, text="📋 View System Information",
+                  command=self.show_system_info,
+                  style='Secondary.TButton').pack(anchor="w", pady=2)
+    
     def create_vendor_tab(self):
         """Create vendor information and capabilities tab."""
         if not self.vendor_support:
@@ -849,7 +1080,7 @@ class ModernCMMCGUI:
         vendors_text_frame = ttk.Frame(vendors_frame)
         vendors_text_frame.pack(fill="x")
         
-        vendors_text = tk.Text(vendors_text_frame, height=8, wrap=tk.WORD, font=('Consolas', 10))
+        vendors_text = tk.Text(vendors_text_frame, height=10, wrap=tk.WORD, font=('Consolas', 10))
         
         # Add scrollbar to vendor text
         vendors_scrollbar = ttk.Scrollbar(vendors_text_frame, orient="vertical", command=vendors_text.yview)
@@ -877,39 +1108,18 @@ class ModernCMMCGUI:
 • Platform-appropriate compliance rules
 • Syntax-aware configuration parsing  
 • Targeted remediation command generation
-• Version-specific feature support"""
+• Version-specific feature support
+
+📋 COMPLIANCE MAPPING:
+• Vendor-specific control implementations
+• Platform-appropriate security baselines
+• Customized remediation procedures
+• Industry best practices integration"""
 
         vendors_text.insert(1.0, vendor_info)
         vendors_text.config(state='disabled')
-    
-    def create_status_bar(self, parent):
-        """Create status bar."""
-        status_frame = ttk.Frame(parent)
-        status_frame.grid(row=2, column=0, sticky="ew")
-        status_frame.grid_columnconfigure(0, weight=1)
-        
-        separator = ttk.Separator(status_frame, orient='horizontal')
-        separator.grid(row=0, column=0, sticky="ew", pady=(10, 0))
-        
-        status_content = ttk.Frame(status_frame)
-        status_content.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        status_content.grid_columnconfigure(0, weight=1)
-        
-        self.status_label = ttk.Label(status_content, text="Ready", 
-                                     font=('Segoe UI', 9),
-                                     foreground=self.colors['gray'])
-        self.status_label.pack(side="left")
-        
-        # Version info
-        version_text = "CMMC Tool v1.0"
-        if self.vendor_support:
-            version_text += " • Multi-Vendor"
-        
-        ttk.Label(status_content, text=version_text,
-                 font=('Segoe UI', 9),
-                 foreground=self.colors['gray']).pack(side="right")
-    
-    # Event handlers
+
+    # Event handlers and methods
     def browse_folder(self, var):
         """Browse for folder and set variable."""
         try:
@@ -918,6 +1128,48 @@ class ModernCMMCGUI:
                 var.set(folder)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to browse folder: {e}")
+    
+    def setup_mock_environment(self):
+        """Set up mock environment quickly."""
+        try:
+            mock_dir = Path("mock_configs")
+            if mock_dir.exists():
+                current_path = mock_dir / "current"
+                baseline_path = mock_dir / "baseline"
+                
+                if current_path.exists() and baseline_path.exists():
+                    self.current_folder.set(str(current_path.absolute()))
+                    self.baseline_folder.set(str(baseline_path.absolute()))
+                    self.root.update()
+                    
+                    messagebox.showinfo("Success", 
+                                      f"Mock environment configured!\n\n"
+                                      f"Current Configs: {current_path}\n"
+                                      f"Baseline Configs: {baseline_path}\n\n"
+                                      f"Ready to run compliance check.")
+                    return
+            
+            # Need to create mock environment
+            if messagebox.askyesno("Create Mock Environment", 
+                                 "Mock environment not found. Create it now?"):
+                self.create_mock_environment()
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Mock environment setup failed: {e}")
+    
+    def create_mock_environment(self):
+        """Create mock environment by importing from separate module."""
+        try:
+            from create_mock_configs import create_mock_configs
+            if create_mock_configs():
+                messagebox.showinfo("Success", "Mock environment created successfully!")
+                self.setup_mock_environment()  # Now configure the paths
+            else:
+                messagebox.showerror("Error", "Failed to create mock environment")
+        except ImportError:
+            messagebox.showerror("Error", "Mock config creator not found. Please ensure create_mock_configs.py exists.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error creating mock environment: {e}")
     
     def start_compliance_check(self):
         """Start compliance check in background thread."""
@@ -939,7 +1191,7 @@ class ModernCMMCGUI:
             messagebox.showerror("Error", f"No .cfg files found in: {current_path}")
             return
         
-        print(f"📁 Found {len(config_files)} config files")
+        print(f"🔍 Found {len(config_files)} config files")
         
         # Prepare for processing
         self.processing = True
@@ -993,6 +1245,9 @@ class ModernCMMCGUI:
                 csv_file = output_path / "compliance_results.csv"
                 self.save_results_to_csv(results, csv_file)
                 
+                # Store results for enhanced dashboard generation
+                self.latest_results = results
+                
                 # Complete
                 if not self.stop_requested:
                     self.root.after(0, lambda: self.compliance_check_complete(results))
@@ -1010,7 +1265,7 @@ class ModernCMMCGUI:
         thread.start()
         
         print("✅ Compliance check thread started")
-    
+
     def save_results_to_csv(self, results, csv_file):
         """Save compliance results to CSV file."""
         try:
@@ -1067,13 +1322,22 @@ class ModernCMMCGUI:
             self.update_results_summary(results)
             
             # Generate reports if enabled
-            if self.generate_pdf.get():
-                print("📊 Auto-generating PDF report...")
-                self.root.after(1000, self.generate_pdf_report)
-            
-            if self.generate_dashboard.get():
-                print("🌐 Auto-generating dashboard...")
-                self.root.after(1500, self.generate_dashboard_report)
+            if self.enhanced_reporting:
+                if self.generate_enhanced_pdf.get():
+                    print("📊 Auto-generating enhanced PDF report...")
+                    self.root.after(1000, lambda: self.generate_enhanced_pdf_report(results))
+                
+                if self.generate_enhanced_dashboard.get():
+                    print("🌐 Auto-generating enhanced dashboard...")
+                    self.root.after(1500, lambda: self.generate_enhanced_dashboard_report(results))
+            else:
+                if self.generate_pdf.get():
+                    print("📊 Auto-generating basic PDF report...")
+                    self.root.after(1000, self.generate_pdf_report)
+                
+                if self.generate_dashboard.get():
+                    print("🌐 Auto-generating basic dashboard...")
+                    self.root.after(1500, self.generate_dashboard_report)
             
             # Switch to results tab
             self.notebook.select(1)
@@ -1088,11 +1352,19 @@ class ModernCMMCGUI:
                 if vendor_types:
                     vendor_info = f"\nVendors detected: {', '.join(vendor_types)}"
             
+            features_used = []
+            if self.enhanced_reporting:
+                features_used.append("enhanced reporting")
+            if self.vendor_support:
+                features_used.append("multi-vendor analysis")
+            
+            features_text = f"\nFeatures: {', '.join(features_used)}" if features_used else ""
+            
             messagebox.showinfo("Complete", 
                               f"Compliance check complete!\n"
                               f"Processed: {total} devices\n"
                               f"Compliant: {compliant} devices\n"
-                              f"Compliance rate: {(compliant/total*100):.1f}%{vendor_info}\n"
+                              f"Compliance rate: {(compliant/total*100):.1f}%{vendor_info}{features_text}\n"
                               f"Results saved to: {self.output_folder.get()}")
         else:
             self.progress_text.set("Complete! No results to process")
@@ -1124,7 +1396,7 @@ class ModernCMMCGUI:
         self.stop_requested = True
         self.stop_button.config(state='disabled')
         self.progress_text.set("Stopping...")
-    
+
     def update_results_summary(self, results):
         """Update results summary display with vendor information."""
         if not hasattr(self, 'summary_text'):
@@ -1155,6 +1427,16 @@ class ModernCMMCGUI:
                 for vendor, count in vendor_counts.items():
                     summary += f"{vendor}: {count} device(s)\n"
                 summary += "\n"
+        
+        # Add feature usage summary
+        if self.enhanced_reporting or self.vendor_support:
+            summary += "Features Used:\n"
+            summary += f"{'-'*15}\n"
+            if self.enhanced_reporting:
+                summary += "• Enhanced reporting with detailed CMMC explanations\n"
+            if self.vendor_support:
+                summary += "• Multi-vendor analysis and detection\n"
+            summary += "\n"
         
         summary += "Device Details:\n"
         summary += f"{'-'*30}\n"
@@ -1187,22 +1469,150 @@ class ModernCMMCGUI:
         if hasattr(self, 'status_label'):
             self.status_label.config(text=message)
             print(f"📊 Status: {message}")
+
+    def generate_enhanced_pdf_report(self, results=None):
+        """Generate enhanced PDF report using simple PDF reporter."""
+        try:
+            # FIXED: Check for SimplePDFReporter availability
+            if not self.pdf_reporter_available or not self.SimplePDFReporter:
+                messagebox.showinfo("PDF Reporting", 
+                              "PDF reporting requires ReportLab.\n"
+                              "Install with: pip install reportlab\n"
+                              "Falling back to basic text report.")
+                self.generate_pdf_report()
+                return
+            
+            # Use stored results if not provided
+            if results is None:
+                results = self.latest_results
+            
+            if not results:
+                messagebox.showwarning("Warning", "No compliance results found. Run a compliance check first.")
+                return
+            
+            output_path = Path(self.output_folder.get())
+            output_path.mkdir(exist_ok=True)
+            
+            print("📊 Generating PDF report using SimplePDFReporter...")
+            
+            # FIXED: Create SimplePDFReporter instance (not EnhancedPDFReporter)
+            pdf_reporter = self.SimplePDFReporter()
+            
+            # Generate the PDF
+            pdf_file = output_path / "compliance_report.pdf"
+            generated_file = pdf_reporter.generate_pdf_report(results, str(pdf_file))
+            
+            print(f"✅ PDF report generated: {generated_file}")
+            
+            # Show success message and offer to open
+            if messagebox.askyesno("Success", 
+                                 f"PDF report generated successfully!\n\n"
+                                 f"Location: {generated_file}\n\n"
+                                 f"Would you like to open it now?"):
+                self.open_file(str(generated_file))
+            
+            self.update_status("PDF report generated")
+            
+        except Exception as e:
+            print(f"❌ Error generating PDF: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Failed to generate PDF: {e}")
     
-    def open_output_folder(self):
-        """Open output folder in file explorer."""
-        output_path = Path(self.output_folder.get())
-        if output_path.exists():
-            if sys.platform == "win32":
-                os.startfile(output_path)
-            elif sys.platform == "darwin":
-                subprocess.run(["open", str(output_path)])
-            else:
-                subprocess.run(["xdg-open", str(output_path)])
-        else:
-            messagebox.showwarning("Warning", f"Output folder does not exist: {output_path}")
+    def generate_enhanced_dashboard_report(self, results=None):
+        """Generate enhanced dashboard using the dashboard generator."""
+        try:
+            if not self.enhanced_reporting:
+                messagebox.showinfo("Enhanced Reporting", 
+                              "Enhanced dashboard requires additional dependencies.\n"
+                              "Using basic dashboard generation instead.")
+                self.generate_dashboard_report()
+                return
+            
+            # Use stored results if not provided
+            if results is None:
+                results = self.latest_results
+            
+            if not results:
+                messagebox.showwarning("Warning", "No compliance results found. Run a compliance check first.")
+                return
+            
+            output_path = Path(self.output_folder.get())
+            output_path.mkdir(exist_ok=True)
+            
+            print("🌐 Generating enhanced dashboard...")
+            
+            # Create enhanced dashboard instance
+            dashboard_generator = self.EnhancedDashboard()
+            
+            # Generate the dashboard
+            dashboard_file = output_path / "enhanced_compliance_dashboard.html"
+            generated_file = dashboard_generator.generate_dashboard(results, str(dashboard_file))
+            
+            print(f"✅ Enhanced dashboard generated: {generated_file}")
+            
+            # Show success message and offer to open
+            if messagebox.askyesno("Success", 
+                                 f"Enhanced dashboard generated successfully!\n\n"
+                                 f"Location: {generated_file}\n\n"
+                                 f"Would you like to open it now?"):
+                webbrowser.open(f"file://{Path(generated_file).absolute()}")
+            
+            self.update_status("Enhanced dashboard generated")
+            
+        except Exception as e:
+            print(f"❌ Error generating enhanced dashboard: {e}")
+            import traceback
+            traceback.print_exc()
+            messagebox.showerror("Error", f"Failed to generate enhanced dashboard: {e}")
     
+    def generate_complete_report_package(self):
+        """Generate complete report package using available results."""
+        try:
+            if not self.latest_results:
+                messagebox.showwarning("Warning", "No compliance results found. Run a compliance check first.")
+                return
+            
+            output_path = Path(self.output_folder.get())
+            output_path.mkdir(exist_ok=True)
+            
+            print("📋 Generating complete report package...")
+            
+            # Generate enhanced dashboard
+            self.generate_enhanced_dashboard_report(self.latest_results)
+            
+            # Generate basic reports as well
+            self.generate_pdf_report()
+            
+            # Create a summary report
+            summary_file = output_path / "report_package_summary.txt"
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                f.write("CMMC 2.0 Compliance Report Package\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Generated: {Path().cwd()}\n")
+                f.write(f"Total devices: {len(self.latest_results)}\n")
+                compliant_count = sum(1 for r in self.latest_results if r.get('compliant', False))
+                f.write(f"Compliant devices: {compliant_count}\n")
+                f.write(f"Compliance rate: {(compliant_count/len(self.latest_results)*100):.1f}%\n\n")
+                
+                f.write("Generated Reports:\n")
+                f.write("- enhanced_compliance_dashboard.html (Interactive dashboard)\n")
+                f.write("- compliance_results.csv (Raw data)\n")
+                f.write("- compliance_report.txt (Basic text report)\n")
+                f.write("- report_package_summary.txt (This file)\n")
+            
+            messagebox.showinfo("Success", 
+                              f"Complete report package generated!\n\n"
+                              f"Location: {output_path}\n"
+                              f"Files: Enhanced dashboard, CSV data, text reports")
+            
+        except Exception as e:
+            print(f"❌ Error generating report package: {e}")
+            messagebox.showerror("Error", f"Failed to generate complete report package: {e}")
+
+    # Basic reporting methods
     def generate_pdf_report(self):
-        """Generate PDF report."""
+        """Generate basic PDF report (fallback when enhanced reporting not available)."""
         try:
             output_path = Path(self.output_folder.get())
             csv_file = output_path / "compliance_results.csv"
@@ -1244,7 +1654,7 @@ class ModernCMMCGUI:
             messagebox.showerror("Error", f"Failed to generate report: {e}")
     
     def generate_dashboard_report(self):
-        """Generate HTML dashboard."""
+        """Generate basic HTML dashboard (fallback)."""
         try:
             output_path = Path(self.output_folder.get())
             csv_file = output_path / "compliance_results.csv"
@@ -1263,20 +1673,23 @@ class ModernCMMCGUI:
             compliant_count = sum(1 for r in results if r['compliant'].lower() == 'true')
             compliance_rate = (compliant_count / len(results)) * 100 if results else 0
             
-            html_content = f"""
-<!DOCTYPE html>
+            html_content = f"""<!DOCTYPE html>
 <html>
 <head>
     <title>CMMC Compliance Dashboard</title>
     <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-        .header {{ background: #2563eb; color: white; padding: 20px; border-radius: 8px; }}
-        .stats {{ display: flex; gap: 20px; margin: 20px 0; }}
-        .stat-card {{ background: #f8fafc; padding: 15px; border-radius: 8px; flex: 1; }}
-        .device-list {{ margin-top: 20px; }}
-        .device {{ padding: 10px; margin: 5px 0; border-radius: 4px; }}
-        .compliant {{ background: #d1fae5; }}
-        .non-compliant {{ background: #fee2e2; }}
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; background: #f8fafc; }}
+        .header {{ background: linear-gradient(135deg, #2563eb, #1d4ed8); color: white; padding: 30px; border-radius: 12px; text-align: center; }}
+        .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }}
+        .stat-card {{ background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }}
+        .stat-number {{ font-size: 2.5rem; font-weight: bold; margin-bottom: 10px; }}
+        .stat-label {{ color: #64748b; font-weight: 500; }}
+        .device-list {{ margin-top: 30px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+        .device-header {{ background: #f1f5f9; padding: 20px; font-weight: bold; }}
+        .device {{ padding: 15px 20px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; }}
+        .device:last-child {{ border-bottom: none; }}
+        .compliant {{ color: #10b981; font-weight: bold; }}
+        .non-compliant {{ color: #ef4444; font-weight: bold; }}
     </style>
 </head>
 <body>
@@ -1287,25 +1700,25 @@ class ModernCMMCGUI:
     
     <div class="stats">
         <div class="stat-card">
-            <h3>Total Devices</h3>
-            <h2>{len(results)}</h2>
+            <div class="stat-number" style="color: #2563eb;">{len(results)}</div>
+            <div class="stat-label">Total Devices</div>
         </div>
         <div class="stat-card">
-            <h3>Compliant</h3>
-            <h2>{compliant_count}</h2>
+            <div class="stat-number" style="color: #10b981;">{compliant_count}</div>
+            <div class="stat-label">Compliant</div>
         </div>
         <div class="stat-card">
-            <h3>Non-Compliant</h3>
-            <h2>{len(results) - compliant_count}</h2>
+            <div class="stat-number" style="color: #ef4444;">{len(results) - compliant_count}</div>
+            <div class="stat-label">Non-Compliant</div>
         </div>
         <div class="stat-card">
-            <h3>Compliance Rate</h3>
-            <h2>{compliance_rate:.1f}%</h2>
+            <div class="stat-number" style="color: {'#10b981' if compliance_rate >= 80 else '#f59e0b' if compliance_rate >= 60 else '#ef4444'};">{compliance_rate:.1f}%</div>
+            <div class="stat-label">Compliance Rate</div>
         </div>
     </div>
     
     <div class="device-list">
-        <h3>Device Details</h3>
+        <div class="device-header">Device Compliance Details</div>
 """
             
             for result in results:
@@ -1313,16 +1726,20 @@ class ModernCMMCGUI:
                 status_text = "COMPLIANT" if result['compliant'].lower() == 'true' else "NON-COMPLIANT"
                 
                 html_content += f"""
-        <div class="device {status_class}">
-            <strong>{result['hostname']}</strong> - {status_text} ({result['score']}%)
-            <br>Vendor: {result['vendor_display']}
+        <div class="device">
+            <div>
+                <strong>{result['hostname']}</strong> - {result['vendor_display']}
+                <div style="font-size: 0.9rem; color: #64748b;">Score: {result['score']}%</div>
+            </div>
+            <div class="{status_class}">{status_text}</div>
+        </div>
 """
-                if result['issues']:
-                    html_content += f"<br>Issues: {result['issues']}"
-                
-                html_content += "</div>\n"
             
             html_content += """
+    </div>
+    
+    <div style="text-align: center; margin-top: 30px; color: #64748b;">
+        Generated by CMMC 2.0 Compliance Tool v2.0
     </div>
 </body>
 </html>
@@ -1335,7 +1752,8 @@ class ModernCMMCGUI:
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate dashboard: {e}")
-    
+
+    # Utility methods
     def generate_remediation(self):
         """Generate remediation scripts."""
         messagebox.showinfo("Remediation", "Remediation feature coming soon!")
@@ -1343,529 +1761,278 @@ class ModernCMMCGUI:
     def view_dashboard(self):
         """Open dashboard in browser."""
         output_path = Path(self.output_folder.get())
-        dashboard_file = output_path / "compliance_dashboard.html"
         
-        if dashboard_file.exists():
-            webbrowser.open(f"file://{dashboard_file.absolute()}")
-        else:
-            messagebox.showwarning("Warning", "Dashboard not found. Generate it first.")
+        # Try enhanced dashboard first, then basic
+        dashboard_files = [
+            "enhanced_compliance_dashboard.html",
+            "compliance_dashboard.html"
+        ]
+        
+        for filename in dashboard_files:
+            dashboard_file = output_path / filename
+            if dashboard_file.exists():
+                webbrowser.open(f"file://{dashboard_file.absolute()}")
+                return
+        
+        messagebox.showwarning("Warning", "Dashboard not found. Generate it first.")
     
     def view_latest_report(self):
         """Open latest report."""
         output_path = Path(self.output_folder.get())
-        report_file = output_path / "compliance_report.txt"
         
-        if report_file.exists():
+        # Try enhanced PDF first, then basic
+        report_files = [
+            "compliance_report.pdf",
+            "compliance_report.txt"
+        ]
+        
+        for filename in report_files:
+            report_file = output_path / filename
+            if report_file.exists():
+                self.open_file(str(report_file))
+                return
+        
+        messagebox.showwarning("Warning", "Report not found. Generate it first.")
+    
+    def export_results(self):
+        """Export results in various formats."""
+        try:
+            output_path = Path(self.output_folder.get())
+            csv_file = output_path / "compliance_results.csv"
+            
+            if not csv_file.exists():
+                messagebox.showwarning("Warning", "No results to export. Run a compliance check first.")
+                return
+            
+            # Ask user for export format
+            export_window = tk.Toplevel(self.root)
+            export_window.title("Export Results")
+            export_window.geometry("300x200")
+            export_window.transient(self.root)
+            export_window.grab_set()
+            
+            # Center the window
+            export_window.update_idletasks()
+            x = (export_window.winfo_screenwidth() // 2) - (export_window.winfo_width() // 2)
+            y = (export_window.winfo_screenheight() // 2) - (export_window.winfo_height() // 2)
+            export_window.geometry(f"+{x}+{y}")
+            
+            tk.Label(export_window, text="Select export format:", font=('Segoe UI', 11, 'bold')).pack(pady=20)
+            
+            export_format = tk.StringVar(value="csv")
+            
+            formats = [
+                ("CSV (Spreadsheet)", "csv"),
+                ("JSON (Data)", "json"),
+                ("TXT (Text Report)", "txt")
+            ]
+            
+            for text, value in formats:
+                tk.Radiobutton(export_window, text=text, variable=export_format, value=value).pack(anchor="w", padx=40, pady=5)
+            
+            def do_export():
+                try:
+                    if export_format.get() == "csv":
+                        # CSV already exists, just copy it
+                        export_file = filedialog.asksaveasfilename(
+                            defaultextension=".csv",
+                            filetypes=[("CSV files", "*.csv")],
+                            title="Save CSV Export"
+                        )
+                        if export_file:
+                            import shutil
+                            shutil.copy(csv_file, export_file)
+                            messagebox.showinfo("Success", f"Results exported to: {export_file}")
+                    
+                    elif export_format.get() == "json":
+                        # Convert CSV to JSON
+                        export_file = filedialog.asksaveasfilename(
+                            defaultextension=".json",
+                            filetypes=[("JSON files", "*.json")],
+                            title="Save JSON Export"
+                        )
+                        if export_file:
+                            results = self.load_results_from_csv(csv_file)
+                            with open(export_file, 'w', encoding='utf-8') as f:
+                                json.dump({
+                                    'compliance_results': results,
+                                    'summary': {
+                                        'total_devices': len(results),
+                                        'compliant_devices': sum(1 for r in results if r.get('compliant', False)),
+                                        'generated_by': 'CMMC 2.0 Compliance Tool v2.0'
+                                    }
+                                }, f, indent=2)
+                            messagebox.showinfo("Success", f"Results exported to: {export_file}")
+                    
+                    export_window.destroy()
+                    
+                except Exception as e:
+                    messagebox.showerror("Error", f"Export failed: {e}")
+            
+            button_frame = tk.Frame(export_window)
+            button_frame.pack(pady=20)
+            
+            tk.Button(button_frame, text="Export", command=do_export).pack(side="left", padx=10)
+            tk.Button(button_frame, text="Cancel", command=export_window.destroy).pack(side="left", padx=10)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Export preparation failed: {e}")
+    
+    def load_results_from_csv(self, csv_file):
+        """Load results from CSV file and convert to expected format."""
+        results = []
+        
+        try:
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    result = {
+                        'hostname': row.get('hostname', 'Unknown'),
+                        'file_path': row.get('file_path', ''),
+                        'vendor_display': row.get('vendor_display', 'Unknown'),
+                        'score': int(row.get('score', 0)),
+                        'compliant': row.get('compliant', 'False').lower() == 'true',
+                        'issues': row.get('issues', '').split('; ') if row.get('issues') else [],
+                        'checks': {}  # Would need more complex parsing for full check details
+                    }
+                    results.append(result)
+        except Exception as e:
+            print(f"Error loading results from CSV: {e}")
+        
+        return results
+    
+    def open_output_folder(self):
+        """Open output folder in file explorer."""
+        output_path = Path(self.output_folder.get())
+        if output_path.exists():
             if sys.platform == "win32":
-                os.startfile(report_file)
+                os.startfile(output_path)
             elif sys.platform == "darwin":
-                subprocess.run(["open", str(report_file)])
+                subprocess.run(["open", str(output_path)])
             else:
-                subprocess.run(["xdg-open", str(report_file)])
+                subprocess.run(["xdg-open", str(output_path)])
         else:
-            messagebox.showwarning("Warning", "Report not found. Generate it first.")
+            messagebox.showwarning("Warning", f"Output folder does not exist: {output_path}")
     
-    def create_mock_environment_direct(self):
-        """Create mock environment directly without subprocess."""
+    def open_file(self, file_path):
+        """Open file with default application."""
         try:
-            print("🏗️ Creating mock environment directly...")
-            
-            # Create directory structure
-            base_dir = Path("mock_configs")
-            current_dir = base_dir / "current"
-            baseline_dir = base_dir / "baseline"
-            
-            current_dir.mkdir(parents=True, exist_ok=True)
-            baseline_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Current configurations (with compliance issues)
-            current_configs = {
-                "edge-router-01.cfg": """!
-version 15.7
-service timestamps debug datetime msec
-service timestamps log datetime msec
-no service password-encryption
-!
-hostname EdgeRouter01
-!
-boot-start-marker
-boot-end-marker
-!
-! Missing enable secret - COMPLIANCE ISSUE
-! Missing AAA configuration - COMPLIANCE ISSUE
-!
-multilink bundle-name authenticated
-!
-crypto pki token default removal timeout 0
-!
-license udi pid CISCO2921/K9 sn FCZ1648C0QJ
-!
-redundancy
-!
-ip access-list extended VTY-MGMT
- permit tcp 10.1.100.0 0.0.0.255 any eq 22
- deny   ip any any
-!
-ip access-list extended WAN-IN
- permit tcp any host 203.0.113.1 eq 22
- permit tcp any host 203.0.113.1 eq 443
- deny   ip any any
-!
-interface GigabitEthernet0/0
- description WAN/Internet Connection
- ip address 203.0.113.1 255.255.255.0
- ip access-group WAN-IN in
- duplex auto
- speed auto
-!
-interface GigabitEthernet0/1
- description LAN Connection to Core Switch
- ip address 10.1.1.1 255.255.255.0
- duplex auto
- speed auto
-!
-interface GigabitEthernet0/2
- no ip address
- shutdown
- duplex auto
- speed auto
-!
-router ospf 1
- log-adjacency-changes
- network 10.1.0.0 0.0.255.255 area 0
-!
-ip forward-protocol nd
-!
-no ip http server
-no ip http secure-server
-!
-control-plane
-!
-line con 0
-line aux 0
-line vty 0 4
- login local
- transport input ssh telnet
- ! Missing access-class - COMPLIANCE ISSUE
-line vty 5 15
- login local
- transport input ssh telnet
- ! Missing access-class - COMPLIANCE ISSUE
-!
-end""",
-
-                "core-switch-01.cfg": """!
-hostname CoreSwitch01
-!
-management ssh
-!
-enable secret 5 $1$ABCD$hashedpasswordhere123
-!
-username admin privilege 15 secret adminpass123
-username netops privilege 5 secret netopspass
-username readonly privilege 1 secret readpass
-!
-aaa authentication login default group tacacs+ local
-aaa group server tacacs+ TACACS-SERVERS
- server 10.1.100.10
- server 10.1.100.11
-!
-tacacs-server host 10.1.100.10 key supersecretkey
-tacacs-server host 10.1.100.11 key supersecretkey
-!
-ip access-list standard MGMT-HOSTS
- 10 permit 10.1.100.0 0.0.0.255
- 20 deny any
-!
-ip access-list extended DMZ-IN
- 10 permit tcp any host 10.1.50.10 eq 80
- 20 permit tcp any host 10.1.50.10 eq 443
- 30 permit tcp any host 10.1.50.20 eq 25
- 40 deny ip any any
-!
-vlan 100
- name Management
-!
-vlan 200
- name Users
-!
-vlan 300
- name Servers
-!
-vlan 500
- name DMZ
-!
-interface Management1
- description Management Interface
- ip address 10.1.100.5/24
- ip access-group MGMT-HOSTS in
-!
-interface Vlan100
- description Management VLAN
- ip address 10.1.100.1/24
-!
-interface Vlan200
- description User VLAN
- ip address 10.1.200.1/24
-!
-interface Vlan300
- description Server VLAN
- ip address 10.1.30.1/24
-!
-interface Vlan500
- description DMZ VLAN
- ip address 10.1.50.1/24
- ip access-group DMZ-IN in
-!
-interface Ethernet1
- description Uplink to Edge Router
- switchport mode trunk
- switchport trunk allowed vlan 100,200,300,500
-!
-interface Ethernet2
- description User Access Port
- switchport mode access
- switchport access vlan 200
-!
-interface Ethernet3
- description Server Access Port
- switchport mode access
- switchport access vlan 300
-!
-interface Ethernet4
- description DMZ Access Port
- switchport mode access
- switchport access vlan 500
-!
-line vty 0 4
- login local
- transport input ssh
-!
-end""",
-
-                "dmz-firewall-01.cfg": """!
-hostname DMZFirewall01
-!
-! Missing enable secret - COMPLIANCE ISSUE
-!
-! Missing proper user accounts - COMPLIANCE ISSUE
-username fwadmin privilege 15 password plaintext123
-!
-aaa authentication login default group tacacs+ local
-tacacs-server host 10.1.100.10 key sharedkey123
-tacacs-server host 10.1.100.12 key sharedkey123
-!
-ip access-list extended OUTSIDE-IN
- permit tcp any host 10.1.50.10 eq 80
- permit tcp any host 10.1.50.10 eq 443
- permit tcp any host 10.1.50.20 eq 25
- permit tcp any host 10.1.50.20 eq 587
- deny ip any any
-!
-ip access-list extended DMZ-TO-INSIDE
- permit tcp host 10.1.50.10 10.1.30.0 0.0.0.255 eq 3306
- permit tcp host 10.1.50.20 10.1.30.0 0.0.0.255 eq 3306
- deny ip any any
-!
-ip access-list extended MGMT-ACCESS
- permit tcp 10.1.100.0 0.0.0.255 any eq 22
- deny ip any any
-!
-interface GigabitEthernet0/0
- description Outside/WAN Interface
- ip address 203.0.113.50 255.255.255.0
- ip access-group OUTSIDE-IN in
-!
-interface GigabitEthernet0/1
- description DMZ Interface
- ip address 10.1.50.254 255.255.255.0
- ! Missing ACL - COMPLIANCE ISSUE
-!
-interface GigabitEthernet0/2
- description Inside Interface
- ip address 10.1.30.254 255.255.255.0
- ip access-group DMZ-TO-INSIDE in
-!
-router ospf 1
- network 10.1.30.0 0.0.0.255 area 0
- network 10.1.50.0 0.0.0.255 area 0
-!
-line vty 0 4
- login local
- transport input ssh telnet
- ! Telnet enabled - COMPLIANCE ISSUE
- access-class MGMT-ACCESS in
-!
-end"""
-            }
-            
-            # Baseline configurations (compliant versions)
-            baseline_configs = {
-                "edge-router-01.cfg": """!
-version 15.7
-service timestamps debug datetime msec
-service timestamps log datetime msec
-no service password-encryption
-!
-hostname EdgeRouter01
-!
-boot-start-marker
-boot-end-marker
-!
-enable secret 5 $1$SAFE$complianthashere789
-!
-username admin privilege 15 secret adminpass123
-username operator privilege 5 secret operatorpass
-!
-aaa authentication login default group tacacs+ local
-tacacs-server host 10.1.100.10 key supersecretkey
-tacacs-server host 10.1.100.11 key supersecretkey
-!
-multilink bundle-name authenticated
-!
-crypto pki token default removal timeout 0
-!
-license udi pid CISCO2921/K9 sn FCZ1648C0QJ
-!
-redundancy
-!
-ip access-list extended VTY-MGMT
- permit tcp 10.1.100.0 0.0.0.255 any eq 22
- deny   ip any any
-!
-ip access-list extended WAN-IN
- permit tcp any host 203.0.113.1 eq 22
- permit tcp any host 203.0.113.1 eq 443
- deny   ip any any
-!
-interface GigabitEthernet0/0
- description WAN/Internet Connection
- ip address 203.0.113.1 255.255.255.0
- ip access-group WAN-IN in
- duplex auto
- speed auto
-!
-interface GigabitEthernet0/1
- description LAN Connection to Core Switch
- ip address 10.1.1.1 255.255.255.0
- duplex auto
- speed auto
-!
-interface GigabitEthernet0/2
- no ip address
- shutdown
- duplex auto
- speed auto
-!
-router ospf 1
- log-adjacency-changes
- network 10.1.0.0 0.0.255.255 area 0
-!
-ip forward-protocol nd
-!
-no ip http server
-no ip http secure-server
-!
-control-plane
-!
-line con 0
-line aux 0
-line vty 0 4
- login local
- transport input ssh
- access-class VTY-MGMT in
-line vty 5 15
- login local
- transport input ssh
- access-class VTY-MGMT in
-!
-end""",
-
-                "core-switch-01.cfg": """!
-hostname CoreSwitch01
-!
-management ssh
-!
-enable secret 5 $1$ABCD$hashedpasswordhere123
-!
-username admin privilege 15 secret adminpass123
-username netops privilege 5 secret netopspass
-username readonly privilege 1 secret readpass
-!
-aaa authentication login default group tacacs+ local
-aaa group server tacacs+ TACACS-SERVERS
- server 10.1.100.10
- server 10.1.100.11
-!
-tacacs-server host 10.1.100.10 key supersecretkey
-tacacs-server host 10.1.100.11 key supersecretkey
-!
-ip access-list standard MGMT-HOSTS
- 10 permit 10.1.100.0 0.0.0.255
- 20 deny any
-!
-ip access-list extended DMZ-IN
- 10 permit tcp any host 10.1.50.10 eq 80
- 20 permit tcp any host 10.1.50.10 eq 443
- 30 permit tcp any host 10.1.50.20 eq 25
- 40 deny ip any any
-!
-vlan 100
- name Management
-!
-vlan 200
- name Users
-!
-vlan 300
- name Servers
-!
-vlan 500
- name DMZ
-!
-interface Management1
- description Management Interface
- ip address 10.1.100.5/24
- ip access-group MGMT-HOSTS in
-!
-interface Vlan100
- description Management VLAN
- ip address 10.1.100.1/24
-!
-interface Vlan200
- description User VLAN
- ip address 10.1.200.1/24
-!
-interface Vlan300
- description Server VLAN
- ip address 10.1.30.1/24
-!
-interface Vlan500
- description DMZ VLAN
- ip address 10.1.50.1/24
- ip access-group DMZ-IN in
-!
-interface Ethernet1
- description Uplink to Edge Router
- switchport mode trunk
- switchport trunk allowed vlan 100,200,300,500
-!
-interface Ethernet2
- description User Access Port
- switchport mode access
- switchport access vlan 200
-!
-interface Ethernet3
- description Server Access Port
- switchport mode access
- switchport access vlan 300
-!
-interface Ethernet4
- description DMZ Access Port
- switchport mode access
- switchport access vlan 500
-!
-line vty 0 4
- login local
- transport input ssh
-!
-end""",
-
-                "dmz-firewall-01.cfg": """!
-hostname DMZFirewall01
-!
-enable secret 5 $1$WXYZ$anotherhashhere456
-!
-username fwadmin privilege 15 secret fwpass123
-username security privilege 10 secret secpass
-!
-aaa authentication login default group tacacs+ local
-tacacs-server host 10.1.100.10 key sharedkey123
-tacacs-server host 10.1.100.12 key sharedkey123
-!
-ip access-list extended OUTSIDE-IN
- permit tcp any host 10.1.50.10 eq 80
- permit tcp any host 10.1.50.10 eq 443
- permit tcp any host 10.1.50.20 eq 25
- permit tcp any host 10.1.50.20 eq 587
- deny ip any any
-!
-ip access-list extended DMZ-TO-INSIDE
- permit tcp host 10.1.50.10 10.1.30.0 0.0.0.255 eq 3306
- permit tcp host 10.1.50.20 10.1.30.0 0.0.0.255 eq 3306
- deny ip any any
-!
-ip access-list extended MGMT-ACCESS
- permit tcp 10.1.100.0 0.0.0.255 any eq 22
- deny ip any any
-!
-ip access-list extended DMZ-PROTECTION
- permit tcp any host 10.1.50.10 eq 80
- permit tcp any host 10.1.50.10 eq 443
- deny ip any any
-!
-interface GigabitEthernet0/0
- description Outside/WAN Interface
- ip address 203.0.113.50 255.255.255.0
- ip access-group OUTSIDE-IN in
-!
-interface GigabitEthernet0/1
- description DMZ Interface
- ip address 10.1.50.254 255.255.255.0
- ip access-group DMZ-PROTECTION in
-!
-interface GigabitEthernet0/2
- description Inside Interface
- ip address 10.1.30.254 255.255.255.0
- ip access-group DMZ-TO-INSIDE in
-!
-router ospf 1
- network 10.1.30.0 0.0.0.255 area 0
- network 10.1.50.0 0.0.0.255 area 0
-!
-line vty 0 4
- login local
- transport input ssh
- access-class MGMT-ACCESS in
-!
-end"""
-            }
-            
-            print("📝 Writing current configuration files...")
-            # Write current configuration files
-            for filename, content in current_configs.items():
-                file_path = current_dir / filename
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                print(f"✅ Created: {file_path}")
-            
-            print("📝 Writing baseline configuration files...")
-            # Write baseline configuration files
-            for filename, content in baseline_configs.items():
-                file_path = baseline_dir / filename
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-                print(f"✅ Created: {file_path}")
-            
-            print("✅ Mock environment created successfully!")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error creating mock environment: {e}")
-            return False
-    
-    def create_mock_environment(self):
-        """Create mock environment (called from settings tab)."""
-        try:
-            if self.create_mock_environment_direct():
-                messagebox.showinfo("Success", "Mock environment created successfully!")
+            if sys.platform == "win32":
+                os.startfile(file_path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", file_path])
             else:
-                messagebox.showerror("Error", "Failed to create mock environment")
+                subprocess.run(["xdg-open", file_path])
         except Exception as e:
-            messagebox.showerror("Error", f"Error creating mock environment: {e}")
+            messagebox.showerror("Error", f"Failed to open file: {e}")
     
     def run_test_suite(self):
         """Run the test suite."""
-        messagebox.showinfo("Test Suite", "Test suite feature coming soon!")
+        try:
+            messagebox.showinfo("Test Suite", 
+                              "Test suite will verify:\n\n"
+                              "• Core compliance checking functionality\n"
+                              "• Report generation capabilities\n"
+                              "• Multi-vendor support (if available)\n"
+                              "• Enhanced reporting features (if available)\n\n"
+                              "Feature coming soon!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Test suite error: {e}")
+    
+    def show_system_info(self):
+        """Show system information and feature availability."""
+        try:
+            info_window = tk.Toplevel(self.root)
+            info_window.title("System Information")
+            info_window.geometry("500x400")
+            info_window.transient(self.root)
+            info_window.grab_set()
+            
+            # Center the window
+            info_window.update_idletasks()
+            x = (info_window.winfo_screenwidth() // 2) - (info_window.winfo_width() // 2)
+            y = (info_window.winfo_screenheight() // 2) - (info_window.winfo_height() // 2)
+            info_window.geometry(f"+{x}+{y}")
+            
+            # Create scrollable text widget
+            text_frame = tk.Frame(info_window)
+            text_frame.pack(fill="both", expand=True, padx=20, pady=20)
+            
+            info_text = tk.Text(text_frame, wrap=tk.WORD, font=('Consolas', 10))
+            scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=info_text.yview)
+            info_text.configure(yscrollcommand=scrollbar.set)
+            
+            info_content = f"""CMMC 2.0 Compliance Tool - System Information
+{'='*50}
+
+Version: 2.0
+Platform: {sys.platform}
+Python Version: {sys.version}
+
+FEATURE AVAILABILITY:
+{'─'*30}
+
+Core Features:
+✅ Basic compliance checking
+✅ Configuration analysis
+✅ CSV export
+✅ Basic reporting
+
+Enhanced Features:
+{'✅' if self.enhanced_reporting else '❌'} Enhanced HTML dashboards with detailed explanations
+{'✅' if self.enhanced_reporting else '❌'} Interactive compliance charts and risk assessments
+{'✅' if self.vendor_support else '❌'} Multi-vendor support
+{'✅' if self.pdf_reporter_available else '❌'} PDF report generation
+{'✅' if self.enhanced_reporting else '❌'} Business impact analysis
+{'✅' if self.enhanced_reporting else '❌'} Detailed remediation plans
+
+CMMC Controls Checked:
+{'─'*25}
+• AC.L1-3.1.1 - Access Control Policy
+• AC.L1-3.1.2 - Account Management
+• IA.L1-3.5.1 - User Identification
+• IA.L1-3.5.2 - User Authentication
+• SC.L1-3.13.1 - Boundary Protection
+• SC.L1-3.13.5 - Public Access Point Controls
+• CM.L1-3.4.1 - Configuration Management
+
+Supported File Types:
+• .cfg (Cisco configuration files)
+• .conf (Generic configuration files)
+• .txt (Text configuration files)
+
+Output Formats:
+• CSV (Comma-separated values)
+• TXT (Plain text reports)
+• HTML (Web dashboards)
+{"• PDF (Professional reports)" if self.pdf_reporter_available else ""}
+{"• Enhanced HTML dashboards" if self.enhanced_reporting else ""}
+{"• JSON (Structured data)" if self.enhanced_reporting else ""}
+
+INSTALLATION NOTES:
+{'─'*20}
+Enhanced dashboard generator is available.
+{"PDF reporting (SimplePDFReporter) is available." if self.pdf_reporter_available else "For PDF reports, install: pip install reportlab"}
+
+Current Working Directory:
+{Path.cwd()}
+
+Output Directory:
+{self.output_folder.get()}
+"""
+            
+            info_text.insert(1.0, info_content)
+            info_text.config(state='disabled')
+            
+            info_text.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            
+            # Close button
+            close_button = tk.Button(info_window, text="Close", command=info_window.destroy)
+            close_button.pack(pady=10)
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to show system info: {e}")
     
     def on_closing(self):
         """Handle window closing event."""
@@ -1880,6 +2047,7 @@ end"""
     def run(self):
         """Start the GUI application."""
         try:
+            print("🚀 Starting CMMC GUI application...")
             self.root.mainloop()
         except Exception as e:
             print(f"Error running GUI: {e}")
@@ -1888,6 +2056,7 @@ end"""
 def main():
     """Main entry point."""
     try:
+        print("🎯 Initializing CMMC 2.0 Compliance Tool...")
         app = ModernCMMCGUI()
         app.run()
     except Exception as e:

@@ -1,7 +1,7 @@
 CMMC 2.0 Level 1 Compliance Report
 ==================================================
 
-Report generated: C:\Users\Elizabeth\Desktop\Seattle U\Capstone\cmmc_tool
+Report generated: C:\Users\Elizabeth\cmmc_tool
 Total devices checked: 3
 
 Compliant devices: 2
@@ -10,11 +10,12 @@ Overall compliance rate: 66.7%
 
 Device Details:
 ------------------------------
-CoreSwitch01: COMPLIANT (80%)
-  Issues: VTY lines missing access-class restrictions
+CoreSwitch01: COMPLIANT (85%)
+  Issues: Missing baseline configurations: 2 items
 
-DMZFirewall01: COMPLIANT (100%)
+DMZFirewall01: COMPLIANT (85%)
+  Issues: Missing baseline configurations: 2 items
 
-EdgeRouter01: NON-COMPLIANT (40%)
-  Issues: No local user accounts found; No administrative privilege accounts found; No user identification mechanism found; No authentication mechanism configured
+EdgeRouter01: NON-COMPLIANT (42%)
+  Issues: AAA authentication not configured; No TACACS+ servers configured; No user identification mechanism found; No authentication mechanism configured; Missing baseline configurations: 1 items
 

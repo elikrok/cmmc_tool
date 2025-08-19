@@ -1,3 +1,4 @@
+# requirements-dev.txt - Development dependencies
 pytest>=7.0.0
 pytest-cov>=4.0.0
 pytest-mock>=3.10.0
@@ -10,6 +11,42 @@ pre-commit>=3.0.0
 build>=0.10.0
 setuptools>=65.0.0
 wheel>=0.37.0
+
+# Enhanced reporting dependencies (same as production)
 reportlab>=4.0.0
 matplotlib>=3.7.0
-pillow>=10.0.0 
+pillow>=10.0.0
+jinja2>=3.1.0
+weasyprint>=59.0
+html5lib>=1.1
+cssselect2>=0.7.0
+tinycss2>=1.2.0
+plotly>=5.17.0
+kaleido>=0.2.1
+seaborn>=0.12.0
+fpdf2>=2.7.0
+pypdf>=3.16.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+python-dateutil>=2.8.0
+
+# Development and testing specific
+jupyter>=1.0.0
+ipython>=8.0.0
+notebook>=6.5.0
+
+# Documentation generation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.2.0
+
+# Code quality and security
+safety>=2.3.0
+vulture>=2.7.0
+radon>=6.0.0
+
+# Performance testing
+locust>=2.15.0
+
+# API testing
+httpx>=0.24.0
+requests>=2.31.0
