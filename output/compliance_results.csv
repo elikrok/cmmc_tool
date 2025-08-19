@@ -1,4 +1,0 @@
-hostname,file_path,vendor_display,score,compliant,total_controls,passed_controls,issues
-CoreSwitch01,C:\Users\Elizabeth\cmmc_tool\mock_configs\current\core-switch-01.cfg,Generic Switch,85,True,7,6,Missing baseline configurations: 2 items
-DMZFirewall01,C:\Users\Elizabeth\cmmc_tool\mock_configs\current\dmz-firewall-01.cfg,Generic,71,False,7,5,DMZ/public interfaces without ACLs: GigabitEthernet0/0; Missing baseline configurations: 2 items
-EdgeRouter01,C:\Users\Elizabeth\cmmc_tool\mock_configs\current\edge-router-01.cfg,Cisco IOS,42,False,7,3,AAA authentication not configured; No TACACS+ servers configured; No user identification mechanism found; No authentication mechanism configured; Missing baseline configurations: 1 items
